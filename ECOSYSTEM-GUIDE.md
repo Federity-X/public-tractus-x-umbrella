@@ -49,8 +49,14 @@ A unique identifier for every company in the Catena-X network. Format: `BPNL0000
 - `BPNS` = Site (physical location)
 
 ### DID (Decentralized Identifier)
-A self-sovereign identity string. Format: `did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AYRE`.
-Every participant has a DID that maps to their BPN.
+A self-sovereign identity string that maps to a participant's BPN. The DID format depends on the **wallet implementation**:
+
+| Wallet | DID Format | Resolution |
+|--------|-----------|------------|
+| SSI DIM Wallet Stub (current) | `did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AYRE` | All DIDs resolve to the single stub host |
+| Identity Hub (production) | `did:web:identity-hub-provider.tx.test:BPNL00000003AYRE` | Each DID resolves to the participant's own Identity Hub |
+
+> **Key insight**: With the stub, every participant's DID resolves through one centralized service. With Identity Hub, each participant's DID resolves through their own wallet — which is the whole point of **decentralized** identity.
 
 ### EDC (Eclipse Dataspace Connector)
 The software that handles **data sharing contracts**. It has two planes:
@@ -223,7 +229,7 @@ Packages everything needed for one EDC participant:
 
 | Component | Purpose |
 |-----------|---------|
-| `ssi-dim-wallet-stub` | Simulates a real SSI wallet — issues DIDs, VCs, handles IATP |
+| `ssi-dim-wallet-stub` | Simulates a real SSI wallet — issues DIDs, VCs, handles DCP (formerly IATP) |
 | `postgresql` | Stores wallet data |
 
 ### The `tx-data-provider` Chart — Glueing Bundles Together
@@ -339,7 +345,7 @@ User/Service Account → CentralIDP (Keycloak) → JWT Token → Application API
 ```
 Used by: Portal, BPDM, Discovery services, Semantic Hub
 
-### Context B: EDC Connector → EDC Connector (IATP/DCP via SSI Wallet)
+### Context B: EDC Connector → EDC Connector (DCP via SSI Wallet)
 Decentralized authentication for data exchange:
 ```
 Step 1: Consumer EDC asks its Wallet for a Verifiable Presentation
@@ -349,7 +355,7 @@ Step 4: Provider EDC checks BDRS for BPN↔DID mapping
 Step 5: Contract negotiation proceeds
 ```
 
-### Detailed IATP Flow
+### Detailed DCP Flow (with SSI DIM Wallet Stub)
 
 ```
                     Consumer EDC                              Provider EDC
@@ -384,19 +390,393 @@ Each EDC connector is configured with:
 ```yaml
 participant:
   id: BPNL00000003AZQP            # Their BPN
-iatp:
-  id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AZQP   # Their DID
+dcp:                                # (recently renamed from "iatp" → PR #2684 in tractusx-edc)
   trustedIssuers:
-    - did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003CRHK    # Operator DID
+    - id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003CRHK    # Operator DID
   sts:
-    dim:
+    div:                            # (recently renamed from "dim" → "div" for Decentralized Identity Verification)
       url: http://ssi-dim-wallet-stub.tx.test/api/sts          # Where to get tokens
     oauth:
       token_url: http://ssi-dim-wallet-stub.tx.test/oauth/token
       client:
         id: BPNL00000003AZQP
         secret_alias: edc-wallet-secret                         # Stored in Vault
+  didService:
+    selfRegistration:
+      enabled: false                # Whether the connector auto-registers its DID
+  cache:
+    enabled: true                   # VP cache for performance
+    validity: 86400                 # Cache TTL in seconds (24h)
 ```
+
+> **Note**: tractusx-edc recently renamed `iatp` → `dcp` and `dim` → `div` (PR #2684, June 2025). Older configs and docs may still use the old names.
+
+---
+
+### How DCP Changes When Identity Hub Replaces the Wallet Stub
+
+The SSI DIM Wallet Stub is a **centralized mock** — one service fakes wallet behaviour for all participants. Identity Hub is the **real DCP-compliant wallet** from the Eclipse Tractus-X project. Switching to it fundamentally changes the trust architecture.
+
+#### What is Identity Hub?
+
+Identity Hub is a **real DCP-compliant wallet** from the upstream Eclipse EDC project (`eclipse-edc/IdentityHub`, not eclipse-tractusx). It is a per-participant (or multi-tenant) service that implements the full Decentralized Claims Protocol. Tractus-X uses it but it's maintained in the upstream EDC repository.
+
+##### Three Internal Services
+
+Identity Hub is composed of **three distinct services** that can be co-located in one process or distributed across clusters:
+
+| Service | Full Name | Responsibility |
+|---------|-----------|---------------|
+| **STS** | Secure Token Service | Creates self-issued tokens with VP Access Tokens using the scope scheme from the Base Identity Protocol. Access tokens are always scoped to a participant context. |
+| **CS** | Credential Service | Manages Verifiable Credentials — stores, retrieves, and serves VPs. Runs the `VerifiableCredentialManager` state machine for credential lifecycle. |
+| **DIDS** | DID Service | Creates, manages, and publishes participant DIDs and DID documents via `DidDocumentPublisher` to a Verifiable Data Registry (VDR). |
+
+##### Two External APIs
+
+| API | Module | Purpose |
+|-----|--------|---------|
+| **Hub API** | `:core:presentation-api` | External-facing. Implements the DCP **Verifiable Presentation Protocol** (VPP) and **Credential Issuance Protocol** (CIP). Contains: **Presentation API** (external parties request VPs), **Storage API** (issuers write VCs), **Credential Offer API** (receive credential offers). |
+| **Identity API** | `:extensions:api:identity-api` | Internal management. CRUD operations on key pairs (rotate, revoke), DID documents (publish, unpublish), credentials (create, renew, delete), and participant contexts. Requires authentication. |
+
+##### Participant Context — The Unit of Management
+
+All identity resources in the Identity Hub are scoped to a **Participant Context** (PC). Each PC is tied to a participant identity (BPN) and contains:
+- VerifiableCredentialResources (the stored VCs)
+- KeyPairResources (the cryptographic keys)
+- DIDResources (the DID and DID document)
+
+Access control is scoped per PC — a token issued for one context cannot access resources in another.
+
+##### Comparison: Stub vs Identity Hub
+
+| Capability | SSI DIM Wallet Stub | Identity Hub |
+|-----------|---------------------|-------------|
+| DID document hosting | One host serves all DID docs | Each participant hosts their own `/.well-known/did.json` via `DidDocumentPublisher` |
+| Verifiable Credential storage | Auto-generated on the fly | Persisted in a credential store (PostgreSQL) with full state machine |
+| STS (Secure Token Service) | Shared endpoint for all | Per-participant STS issues Self-Issued (SI) tokens with VP Access Tokens |
+| VP (Verifiable Presentation) | Stub fabricates VPs instantly | Real VPs assembled from stored VCs by `VerifiablePresentationService` and signed with participant's private key (from Vault) |
+| Credential issuance | Implicit — stub pretends VCs exist | Explicit — Credential Issuer pushes VCs into Identity Hub via Storage API / CIP |
+| Key management | No real key management | `KeyPairResource` with rotation/revocation state machine; private keys stored in Vault |
+| Trust anchoring | Single trusted issuer DID on stub | Trust chain verified through DID resolution of each issuer's Identity Hub |
+
+#### DCP Flow Today (with SSI DIM Wallet Stub)
+
+```
+Consumer EDC ──► Stub /api/sts ──► Stub fabricates SI token + VP
+                                    (all in one call, no real crypto)
+Consumer EDC ──► Provider EDC   ──► Provider asks Stub to verify
+                                    (Stub says "yes" for everything)
+```
+
+**Problem**: This is not decentralized at all. The stub is a single point of trust. It doesn't prove the consumer actually holds any credential — it just generates tokens for any BPN that asks.
+
+#### DCP Flow with Identity Hub (Production)
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                    FULL DCP CREDENTIAL PRESENTATION FLOW                  │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│  ┌─────────────┐         ┌──────────────────────┐                        │
+│  │ Consumer EDC │         │ Consumer Identity Hub │                        │
+│  └──────┬──────┘         └──────────┬───────────┘                        │
+│         │                           │                                     │
+│   1. Consumer EDC needs to call     │                                     │
+│      Provider EDC's catalog API     │                                     │
+│         │                           │                                     │
+│   2. POST /api/sts                  │                                     │
+│      {                              │                                     │
+│        audience: "did:web:identity-hub-provider.tx.test:BPNL...AYRE",    │
+│        scope: "org.eclipse.tractusx.vc.type:MembershipCredential:read"   │
+│      }                              │                                     │
+│         ├──────────────────────────►│                                     │
+│         │                           │                                     │
+│         │   3. Identity Hub:        │                                     │
+│         │      a. Finds the MembershipCredential VC in its store         │
+│         │      b. Verifies the VC is not expired/revoked                  │
+│         │      c. Creates a VP wrapping the VC                            │
+│         │      d. Signs the VP with consumer's private key (from Vault)  │
+│         │      e. Creates a Self-Issued (SI) token containing:           │
+│         │         - iss: consumer's DID                                    │
+│         │         - sub: consumer's DID                                    │
+│         │         - aud: provider's DID (the audience)                    │
+│         │         - token: the signed VP                                   │
+│         │                           │                                     │
+│         │◄──────────────────────────┤  SI Token (JWT)                     │
+│         │                           │                                     │
+│  ┌──────▼──────┐                    │    ┌──────────────────────┐         │
+│  │ Consumer EDC │                    │    │  Provider EDC         │         │
+│  └──────┬──────┘                    │    └──────────┬───────────┘         │
+│         │                           │               │                     │
+│   4. Consumer EDC sends catalog     │               │                     │
+│      request with SI token in       │               │                     │
+│      Authorization header           │               │                     │
+│         ├───────────────────────────┼──────────────►│                     │
+│         │                           │               │                     │
+│         │                           │    5. Provider EDC receives request  │
+│         │                           │       and validates the SI token:    │
+│         │                           │               │                     │
+│         │                           │       a. Extract issuer DID from JWT │
+│         │                           │       b. Resolve DID document:       │
+│         │                           │          GET did:web:identity-hub-   │
+│         │                           │          consumer1.tx.test:BPNL...  │
+│         │                           │          → fetches /.well-known/     │
+│         │                           │            did.json from consumer's  │
+│         │                           │            Identity Hub              │
+│         │                           │       c. Extract public key from     │
+│         │                           │          DID document                │
+│         │                           │       d. Verify JWT signature with   │
+│         │                           │          that public key             │
+│         │                           │       e. Extract VP from token       │
+│         │                           │       f. Verify VP signature         │
+│         │                           │       g. Extract VC from VP          │
+│         │                           │       h. Check VC issuer is in       │
+│         │                           │          trustedIssuers list         │
+│         │                           │       i. Resolve issuer's DID doc   │
+│         │                           │          to verify VC signature      │
+│         │                           │       j. Check VC not revoked        │
+│         │                           │          (status list check)         │
+│         │                           │       k. Extract BPN from VC claims  │
+│         │                           │       l. Resolve BPN via BDRS to     │
+│         │                           │          confirm DID↔BPN binding     │
+│         │                           │               │                     │
+│         │                           │    6. If all checks pass → evaluate  │
+│         │                           │       access policies against the    │
+│         │                           │       presented credentials          │
+│         │                           │               │                     │
+│         │◄──────────────────────────┼───────────────┤  Catalog Response   │
+│         │                           │               │                     │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+#### What Changes in Configuration
+
+When Identity Hub replaces the stub, **every EDC connector's DCP config must change**:
+
+```yaml
+# BEFORE (Stub) — all connectors point to the same shared stub
+dcp:
+  trustedIssuers:
+    - id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003CRHK
+  sts:
+    div:
+      url: http://ssi-dim-wallet-stub.tx.test/api/sts
+    oauth:
+      token_url: http://ssi-dim-wallet-stub.tx.test/oauth/token
+
+# AFTER (Identity Hub) — each connector points to its OWN Identity Hub
+dcp:
+  trustedIssuers:
+    - id: did:web:identity-hub-operator.tx.test:BPNL00000003CRHK
+  sts:
+    div:
+      url: http://identity-hub-consumer1.tx.test/api/sts
+    oauth:
+      token_url: http://identity-hub-consumer1.tx.test/oauth/token
+```
+
+**All touchpoints that change**:
+
+| Component | Config Key | Current (Stub) | With Identity Hub |
+|-----------|-----------|----------------|-------------------|
+| **EDC participant.id** | `participant.id` | `did:web:ssi-dim-wallet-stub.tx.test:<BPN>` | `did:web:<participant-ih-host>:<BPN>` |
+| **EDC dcp.sts** | `dcp.sts.div.url` | `http://ssi-dim-wallet-stub.tx.test/api/sts` | `http://<participant-ih-host>/api/sts` |
+| **EDC dcp.oauth** | `dcp.sts.oauth.token_url` | `http://ssi-dim-wallet-stub.tx.test/oauth/token` | `http://<participant-ih-host>/oauth/token` |
+| **Portal custodian** | `portal.custodianAddress` | `http://ssi-dim-wallet-stub.tx.test` | `http://identity-hub.tx.test` (operator IH) |
+| **Portal DIM wrapper** | `portal.dimWrapper.baseAddress` | `http://ssi-dim-wallet-stub.tx.test` | `http://identity-hub.tx.test` |
+| **Portal DIM auth** | `portal.decentralIdentityManagementAuthAddress` | `http://ssi-dim-wallet-stub.tx.test/api/sts` | `http://identity-hub.tx.test/api/sts` |
+| **Portal issuerdid** | `portal.backend.administration.issuerdid` | `did:web:ssi-dim-wallet-stub.tx.test:BPNL...CRHK` | `did:web:identity-hub.tx.test:BPNL...CRHK` |
+| **Credential Issuer** | `ssi-credential-issuer.walletAddress` | `http://ssi-dim-wallet-stub.tx.test` | `http://identity-hub.tx.test` |
+| **BDRS seeding** | `bdrs-server-memory.seeding.bpnList[].did` | `did:web:ssi-dim-wallet-stub.tx.test:<BPN>` | `did:web:<participant-ih-host>:<BPN>` |
+
+#### Credential Lifecycle — The Biggest New Requirement
+
+With the stub, credentials don't really exist — the stub pretends they do. With Identity Hub, there's a real **credential lifecycle** managed by the `VerifiableCredentialManager` with a full state machine:
+
+```
+VerifiableCredentialResource State Machine:
+┌─────────┐   request   ┌────────────┐  response   ┌───────────┐  issue   ┌────────┐
+│ INITIAL ├────────────►│ REQUESTING ├────────────►│ REQUESTED ├────────►│ISSUING │
+└─────────┘             └────────────┘             └───────────┘         └───┬────┘
+                                                                             │
+                                                                          issued
+                                                                             │
+┌───────────┐  re-request ┌───────────────────┐  re-respond ┌──────────────────┐  │
+│TERMINATED │◄────────────│REISSUE_REQUESTING │◄────────────│REISSUE_REQUESTED │  │
+└───────────┘             └───────────────────┘             └──────────────────┘  │
+      ▲                                                            ▲              │
+      │ revoke/expire                                   auto-renew │              │
+      │                                                (near expiry)│              │
+      │                   ┌────────┐                               │              │
+      └───────────────────┤ ISSUED │◄──────────────────────────────┼──────────────┘
+                          └───┬────┘                               │
+                              └────────────────────────────────────┘
+                              (any state can also → ERROR)
+```
+
+The `VerifiableCredentialManager` (VCM):
+- Is **cluster-aware** — guarantees only one flow per credential across all runtime instances
+- Supports **auto-renewal** when it detects a credential is nearing expiry (configurable, default `true`)
+- Dispatches credential requests via the EDC `RemoteMessageDispatcher` using the Credential Issuance Protocol (CIP)
+- Delegates to the EDC `PolicyEngine` to evaluate `issuancePolicy` and `reissuancePolicy` (ODRL) before generating tokens for issuer requests
+
+Three things can trigger a credential renewal:
+1. An incoming **credential offer** from an issuer (handled by the `OfferProcessor`)
+2. The VCM state machine detects **nearing expiry** (if auto-renewal is active)
+3. A **manual action** via the Identity API
+
+The complete flow before data exchange can work:
+
+```
+1. Company onboards via Portal
+        │
+2. Portal triggers Credential Issuer to issue MembershipCredential
+        │
+3. Credential Issuer creates a VC and pushes it to the company's Identity Hub
+   (via Hub API → Storage API, or via DCP Credential Issuance Protocol)
+        │
+4. Identity Hub stores the VC as a VerifiableCredentialResource (state → ISSUED)
+   in its credential store (PostgreSQL), scoped to the company's ParticipantContext
+        │
+5. NOW the company's EDC can request VPs from its Identity Hub
+   (the STS creates VP Access Tokens, the CS assembles VPs from stored VCs)
+        │
+6. Data exchange proceeds via DCP as shown above
+```
+
+**If step 3–4 fails or hasn't happened yet**, the EDC connector will get an error from Identity Hub when requesting a VP — the credential simply isn't there. With the stub, this never happens because it fabricates everything.
+
+#### Deployment Architecture Impact
+
+The Identity Hub architecture document defines **two official deployment topologies**:
+
+1. **Embedded**: Identity Hub runs inside the EDC control-plane runtime (same JVM process)
+2. **Standalone**: Identity Hub runs as a separate single or clustered runtime
+
+In the umbrella chart context, this translates to three practical options:
+
+```
+CURRENT (1 stub serves all):
+┌──────────────────────────────────────┐
+│  SSI DIM Wallet Stub                 │
+│  ┌────┐ ┌────┐ ┌────┐               │
+│  │BPN1│ │BPN2│ │BPN3│  ...           │ ← All identities in one service
+│  └────┘ └────┘ └────┘               │
+└──────────────────────────────────────┘
+
+WITH IDENTITY HUB:
+
+Option A — Embedded in EDC (simplest for testing):
+┌──────────────────────────────────────────────┐
+│ EDC Control Plane + Embedded Identity Hub     │
+│  ┌─────────────────┐ ┌───────────────────┐   │
+│  │ EDC Control Plane│ │ Identity Hub       │   │
+│  │ (catalog, policy,│ │ (STS + CS + DIDS)  │   │
+│  │  negotiation)    │ │                    │   │
+│  └─────────────────┘ └───────────────────┘   │
+│  Same process — no network calls for STS      │
+└──────────────────────────────────────────────┘
+↑ Lightest — STS calls are in-process. Can even short-circuit
+  key resolution by loading KeyPairResource directly from storage.
+
+Option B — Standalone per-participant (most realistic for production):
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ IH: Provider     │  │ IH: Consumer 1   │  │ IH: Consumer 2   │
+│ BPNL...AYRE      │  │ BPNL...AZQP      │  │ BPNL...AVTH      │
+│ + PostgreSQL     │  │ + PostgreSQL     │  │ + PostgreSQL     │
+│ + Vault keys     │  │ + Vault keys     │  │ + Vault keys     │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
+↑ Heavy — each participant needs its own IH + DB
+
+Option C — Standalone shared/multi-tenant (practical for umbrella testing):
+┌──────────────────────────────────────┐
+│  Identity Hub (multi-tenant)         │
+│  ┌────┐ ┌────┐ ┌────┐               │
+│  │PC:1│ │PC:2│ │PC:3│  ...           │ ← Isolated ParticipantContexts
+│  └────┘ └────┘ └────┘               │
+│  + PostgreSQL                        │
+│  + Vault integration                 │
+└──────────────────────────────────────┘
+↑ Lighter — shared infrastructure, isolated by ParticipantContext
+```
+
+For the **umbrella chart** (testing/dev), Option A or C are most practical. For **production**, Option B (per-participant standalone) is the target architecture.
+
+#### Summary: Stub vs Identity Hub
+
+| Aspect | SSI DIM Wallet Stub | Identity Hub |
+|--------|---------------------|-------------|
+| **Architecture** | Centralized mock | Decentralized (per-participant or multi-tenant) |
+| **Credentials** | Fabricated on demand | Real VCs issued, stored, and presented |
+| **Cryptography** | No real signing | Real key pairs; JWTs and VPs are cryptographically signed |
+| **DID resolution** | All DIDs resolve to one host | Each DID resolves to the participant's own wallet |
+| **Credential issuance** | Not needed | Required before data exchange can work |
+| **Revocation** | Not real | Status list credential checks |
+| **Trust verification** | Stub always says "yes" | Full DID → public key → signature verification chain |
+| **Failure modes** | Almost none (it's a mock) | Missing credentials, expired VCs, revoked VCs, key rotation issues |
+| **Production-ready** | No | Yes |
+
+#### How tractusx-edc Implements DCP (Extension Structure)
+
+The tractusx-edc repository (`eclipse-tractusx/tractusx-edc`) provides the EDC DCP integration through these extensions in `edc-extensions/dcp/`:
+
+| Extension | Purpose |
+|-----------|---------|
+| `cx-dcp` | **Catena-X scope extractors** — extracts credential scopes from EDC policies (e.g., maps a `MembershipCredential` policy constraint to a DCP scope string like `org.eclipse.tractusx.vc.type:MembershipCredential:read`) |
+| `tx-dcp` | **Tractus-X DCP core** — Tractus-X-specific DCP implementation (DSP 0.8 protocol support) |
+| `tx-dcp-sts-div` | **STS DIV client** — the client that talks to Identity Hub's STS endpoint to request SI tokens. "DIV" = Decentralized Identity Verification (recently renamed from "DIM") |
+| `verifiable-presentation-cache` | **VP caching** — caches resolved Verifiable Presentations for performance; configurable TTL (default 24h) |
+
+Additional DCP-related extensions in tractusx-edc:
+
+| Extension | Purpose |
+|-----------|---------|
+| `edc-extensions/did-document/` | DID document handling for the connector |
+| `edc-extensions/bdrs-client/` | BPN/DID Resolution Service client — resolves partner BPNs to DIDs; has configurable cache validity (default 600s) |
+| `edc-extensions/bpn-validation/` | Validates BPN claims in presented credentials |
+| `edc-extensions/cx-policy/` | Catena-X policy definitions and evaluators |
+| `edc-extensions/token-interceptor/` | Intercepts and enriches tokens in the DCP flow |
+| `edc-extensions/tokenrefresh-handler/` | Handles token refresh logic for long-running transfers |
+
+The Identity Hub's DCP protocol implementation (`eclipse-edc/IdentityHub`, `protocols/dcp/`) contains:
+
+| Module | Purpose |
+|--------|---------|
+| `dcp-core` | Core DCP protocol types and logic |
+| `dcp-spi` | Service Provider Interfaces for DCP extensions |
+| `dcp-identityhub` | Identity Hub-side DCP implementation: `presentation-api`, `storage-api`, `credential-offer-api`, `credentials-api-configuration` |
+| `dcp-issuer` | Issuer-side DCP implementation: `dcp-issuer-api`, `dcp-issuer-core`, `dcp-issuer-spi` |
+| `dcp-transform-lib` | JSON-LD transformers for DCP protocol messages |
+| `dcp-validation-lib` | Validators for DCP protocol messages |
+
+#### Key Pair Management in Identity Hub
+
+Identity Hub manages `KeyPairResources` with a lifecycle state machine:
+
+```
+┌─────────┐  activate  ┌───────────┐  rotate  ┌─────────┐  revoke  ┌─────────┐
+│ INITIAL ├───────────►│ ACTIVATED ├─────────►│ ROTATED ├────────►│ REVOKED │
+└─────────┘            └───────────┘          └─────────┘         └─────────┘
+                        (any state can also → ERROR)
+```
+
+Key concepts:
+- Each `KeyPairResource` has a `groupName` — services are configured with a group to indicate which key pair to use for signing
+- Only one `KeyPairResource` should be active per group
+- `useDuration`: how long (ms) a key stays ACTIVATED before auto-rotation starts (`-1` = indefinite, manual trigger)
+- `rotationDuration`: how long (ms) a key stays ROTATED before auto-revocation (`-1` = indefinite, manual trigger)
+- Private keys are stored in Vault; public keys are in the DID document as verification methods
+
+**Key rotation** involves:
+1. Creating a new `KeyPairResource` in the same group
+2. Destroying the old private key
+3. Adding a new verification method to the DID document
+4. Publishing the updated DID document
+
+**Key revocation** involves:
+1. Transitioning from ROTATED → REVOKED
+2. Removing the verification method from the DID document
+3. Publishing the updated DID document
 
 ---
 
@@ -426,7 +806,7 @@ Consumer → Discovery Finder: "Where can I resolve BPNs?"
 
 ```
 Consumer EDC ──[Catalog Request]──► Provider EDC
-     (authenticated via IATP/VP)
+     (authenticated via DCP/VP)
 Consumer EDC ──[Negotiate Contract]──► Provider EDC
 Consumer EDC ◄──[Contract Agreement]── Provider EDC
 ```
@@ -465,7 +845,7 @@ Seeding happens automatically via Helm **post-install hooks** (Kubernetes Jobs t
 
 ### Vault Setup (post-install-vault-setup.yaml)
 For each EDC instance:
-1. Writes `edc-wallet-secret` to Vault (used for IATP authentication)
+1. Writes `edc-wallet-secret` to Vault (used for DCP authentication)
 2. Writes `tokenSignerPublicKey` and `tokenSignerPrivateKey` (RSA keypair for JWT signing)
 3. Writes `tokenEncryptionAesKey` (AES key for encrypting tokens)
 
@@ -498,7 +878,7 @@ Each EDC participant gets its own Vault instance:
 
 Contents of each Vault:
 ```
-secret/data/edc-wallet-secret       → The IATP client secret
+secret/data/edc-wallet-secret       → The DCP client secret (for STS DIV OAuth)
 secret/data/tokenSignerPublicKey    → RSA public key (PEM)
 secret/data/tokenSignerPrivateKey   → RSA private key (PEM)
 secret/data/tokenEncryptionAesKey   → AES symmetric key
@@ -786,17 +1166,26 @@ Only the **Data Provider (OEM A)** has actual EDC infrastructure deployed with t
 | **BDRS** | BPN/DID Resolution Service — maps BPNs to DIDs |
 | **BPN** | Business Partner Number — unique company identifier |
 | **BPDM** | Business Partner Data Management — golden record system |
-| **DCP** | Decentralized Claims Protocol (formerly IATP) |
+| **DCP** | Decentralized Claims Protocol (formerly IATP) — the protocol for credential presentation between connectors. Recently renamed from IATP in tractusx-edc (PR #2684) |
 | **DID** | Decentralized Identifier — self-sovereign identity identifier |
+| **DIV** | Decentralized Identity Verification — the renamed STS client in tractusx-edc (previously DIM). The `tx-dcp-sts-div` extension talks to Identity Hub's STS |
 | **DTR** | Digital Twin Registry |
 | **EDC** | Eclipse Dataspace Connector |
+| **Hub API** | Identity Hub's external API — implements the DCP Verifiable Presentation Protocol (Presentation API + Storage API) and Credential Issuance Protocol (Credential Offer API) |
 | **IATP** | Identity and Trust Protocol (now DCP) |
+| **Identity API** | Identity Hub's internal management API — CRUD on DIDs, keys, credentials, and ParticipantContexts |
+| **Identity Hub** | Eclipse EDC upstream wallet (`eclipse-edc/IdentityHub`) — manages DIDs, stores VCs, provides STS/CS/DIDS services; replaces the SSI DIM Wallet Stub. Used by Tractus-X but maintained in the upstream EDC project |
 | **IDP** | Identity Provider (Keycloak) |
 | **SAMM** | Semantic Aspect Meta Model |
+| **SI Token** | Self-Issued Token — a JWT issued by Identity Hub's STS, containing a VP Access Token as proof of identity |
 | **SSI** | Self-Sovereign Identity |
-| **STS** | Secure Token Service |
-| **VC** | Verifiable Credential |
-| **VP** | Verifiable Presentation |
+| **STS** | Secure Token Service — Identity Hub service that issues SI tokens; creates VP Access Tokens using the scope scheme from the Base Identity Protocol |
+| **VC** | Verifiable Credential — a signed attestation (e.g., MembershipCredential proving dataspace membership); managed through a state machine (INITIAL → REQUESTING → REQUESTED → ISSUING → ISSUED → TERMINATED) |
+| **VP** | Verifiable Presentation — a signed wrapper around one or more VCs, created for a specific audience by the VerifiablePresentationService |
+| **VDR** | Verifiable Data Registry — where DID documents are published (e.g., a CDN or web server serving `/.well-known/did.json`) |
+| **ParticipantContext** | The unit of management in Identity Hub — scopes all identity resources (VCs, keys, DIDs) to a specific participant identity (BPN) |
+| **CIP** | Credential Issuance Protocol — the DCP sub-protocol for requesting and issuing Verifiable Credentials |
+| **VPP** | Verifiable Presentation Protocol — the DCP sub-protocol for requesting and serving Verifiable Presentations |
 
 ---
 
