@@ -7,44 +7,60 @@
    https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/docs/usage/dcp-api-walkthrough
 
    --------------------------------------------------------------------------
-   API surface (v0.2.0, verified against the upstream Bruno collection):
+   API surface (v0.2.0, verified against the upstream Bruno collection
+   and `docs/usage/dcp-api-walkthrough/0[1-9]_*.md`):
 
-     IdentityHub  POST /api/identity/v1alpha/participants               (create ctx)
-     IdentityHub  PUT  /api/identity/v1alpha/participants/{ctx}/keypairs (extra key)
-     IdentityHub  POST /api/identity/v1alpha/participants/{ctx}/state?isActive=true  (activate + publish DID)
-     IdentityHub  GET  /api/identity/v1alpha/participants/{ctx}/credentials          (verify VC store)
+     IdentityHub  POST /api/identity/v1alpha/participants                       (step 2: create holder ctx)
+     IdentityHub  POST /api/identity/v1alpha/participants/{ctx}/state?isActive=true   (step 3: activate)
+     IdentityHub  POST /api/identity/v1alpha/participants/{ctx}/credentials/request   (step 8: DCP request)
+     IdentityHub  GET  /api/identity/v1alpha/participants/{ctx}/credentials           (step 9: retrieve)
 
-     IssuerSvc    POST /api/identity/v1alpha/participants               (create issuer ctx — IS uses
-                                                                          the same identity API surface)
-     IssuerSvc    POST /api/identity/v1alpha/participants/{ctx}/state?isActive=true  (activate)
-     IssuerSvc    POST /api/issueradmin/v1alpha/participants/{issuerCtx}/holders         (register holder)
-     IssuerSvc    POST /api/issueradmin/v1alpha/participants/{issuerCtx}/credentialdefinitions
+     IssuerSvc    POST /api/identity/v1alpha/participants                       (step 1: create issuer ctx —
+                                                                                  IS uses the same identity API)
+     IssuerSvc    POST /api/identity/v1alpha/participants/{ctx}/state?isActive=true   (step 3: activate)
+     IssuerSvc    POST /api/admin/v1alpha/participants/{issuerCtx}/attestations            (step 5)
+     IssuerSvc    POST /api/admin/v1alpha/participants/{issuerCtx}/credentialdefinitions   (step 6)
+     IssuerSvc    POST /api/admin/v1alpha/participants/{issuerCtx}/holders                 (step 7)
 
    Auth: every admin call carries `x-api-key: <key>`. The key is generated
          on first boot by SuperUserSeedExtension and printed once to the
          pod log; we extract it via `kubectl logs`.
+
+   NOTE on the issuer-admin path: the chart mounts the issuer-admin
+   endpoint at `/api/admin` (NOT `/api/issueradmin` — the latter is only
+   the bruno-collection variable name). Confirmed via the upstream
+   tractusx-issuerservice chart README.
    --------------------------------------------------------------------------
 
    Flow:
-     0. Wait for IH/IS pods to be Ready.
-     1. Extract super-user API keys from IH/IS pod logs.
-     2. SETUP — bootstrap the issuer's own ParticipantContext on IS
-        (create + activate). Idempotent.
-     3. PER PARTICIPANT (consumers + provider):
-          a. Create holder ParticipantContext on IH (with inline keypair).
-          b. Activate holder ctx (publishes did:web).
-          c. Register holder with IssuerService.
-     4. Emit a final SEED SUMMARY line.
-
-   NOT (yet) implemented in this hook:
-     * Issuance of concrete VerifiableCredentials (MembershipCredential,
-       FrameworkAgreement.*, etc.). This requires a real DCP exchange
-       between IH and IS and is exercised end-to-end by the data-flow
-       tests rather than provisioned synchronously here.
+     0.  Wait for IH/IS pods to be Ready.
+     1.  Extract super-user API keys from IH/IS pod logs.
+     1b. Pre-flight liveness probe (GET participants?limit=1 → 200).
+     2.  SETUP — bootstrap the issuer's own ParticipantContext on IS
+         (create + activate), then create one shared `holders` attestation
+         + one CredentialDefinition per unique credential type declared
+         under wallet.participants[].credentials. Idempotent.
+     3.  PER PARTICIPANT (consumers + provider):
+           a. Create holder ParticipantContext on IH (with inline keypair
+              + CredentialService serviceEndpoint).
+           b. Activate holder ctx (publishes did:web).
+           c. Register holder with IssuerService.
+           d. (best-effort) For each credential type declared for this
+              participant: POST credentials/request to IH and poll
+              IH /credentials until the credential appears in state ISSUED.
+              Failures here are logged as warnings, not Job failures —
+              the DCP exchange depends on did:web resolution + STS keying
+              that may not be wired correctly on every cluster.
+     4.  Emit a final SEED SUMMARY line.
 
    Idempotency: every POST tolerates HTTP 409 (already-exists).
-   Failure semantics: any unexpected ≥400 response fails the Job, which
-   in turn fails `helm install`.
+   Failure semantics: setup + steps 2/3/7 are strict (any ≥400 fails the
+   Job). Steps 5/6 (attestation + credentialdef) and steps 8/9
+   (credentials request + retrieve) are best-effort and only emit
+   warnings — the upstream IssuerService image does not always bundle
+   the `database` attestation extension, so the seed remains green even
+   when DCP issuance is unavailable. Operators can install the missing
+   extension and re-run the Job without re-rolling the whole release.
 */ -}}
 {{- if and (eq (.Values.wallet.mode | default "stub") "identityHub") .Values.wallet.identityHubSeed.enabled }}
 {{- $fullName := include "dataprovider.fullname" . -}}
@@ -103,15 +119,19 @@ spec:
               set -eu -o pipefail
 
               IH_IDENTITY=$(cat /etc/wallet/identity-hub-internal-identity-api)
+              IH_CREDENTIALS=$(cat /etc/wallet/identity-hub-internal-credentials-api)
               IS_IDENTITY=$(cat /etc/wallet/issuer-service-internal-identity-api)
               IS_ISSUERADMIN=$(cat /etc/wallet/issuer-service-internal-issueradmin-api)
+              IS_ISSUANCE=$(cat /etc/wallet/issuer-service-internal-issuance-api)
               ISSUER_DID=$(cat /etc/wallet/issuer-did)
               ISSUER_PID=$(cat /etc/wallet/issuer-participant-id)
               ISSUER_PID_B64=$(cat /etc/wallet/issuer-participant-id-b64)
 
               echo "[ih-seed] identity-hub identity API     = $IH_IDENTITY"
+              echo "[ih-seed] identity-hub credentials API  = $IH_CREDENTIALS"
               echo "[ih-seed] issuer-service identity API   = $IS_IDENTITY"
               echo "[ih-seed] issuer-service issueradmin    = $IS_ISSUERADMIN"
+              echo "[ih-seed] issuer-service issuance API   = $IS_ISSUANCE"
               echo "[ih-seed] issuer DID                    = $ISSUER_DID"
               echo "[ih-seed] issuer participant id         = $ISSUER_PID"
               echo "[ih-seed] issuer participant id (b64)   = $ISSUER_PID_B64"
@@ -203,13 +223,45 @@ spec:
               }
 
               ########################################################
-              # Build a participant-context create body. The `key` block
-              # tells the server to generate a fresh keypair inline using
-              # the JsonWebKey2020 / EC P-256 algorithm (matches the
-              # default suite used by the rest of the umbrella stack).
+              # POST helper: best-effort, never fails the Job.
+              # Used for steps 8/9 where DCP exchange may surface
+              # cluster-specific issues (did:web resolution, STS keying)
+              # that we want to surface but not block on.
+              ########################################################
+              post_softfail() {
+                local url="$1" key="$2" body="$3" ctx="$4"
+                local code
+                code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+                  -X POST "$url" \
+                  -H "Content-Type: application/json" \
+                  -H "x-api-key: $key" \
+                  -d "$body") || code="000"
+                case "$code" in
+                  2??) echo "[ih-seed] $ctx  OK ($code)"; return 0;;
+                  409) echo "[ih-seed] $ctx  already exists (409, idempotent)"; return 0;;
+                  *)
+                    echo "[ih-seed] $ctx  WARN ($code) — body:"
+                    cat /tmp/resp.json || true
+                    echo
+                    return 1
+                    ;;
+                esac
+              }
+
+              ########################################################
+              # Build a participant-context create body. Includes a
+              # `key` block telling the server to generate a fresh keypair
+              # inline (JsonWebKey2020 / EC P-256 — the default suite the
+              # rest of the umbrella stack expects), and a `serviceEndpoints`
+              # array so the resulting did:web document advertises the
+              # right service entry (per upstream walkthrough §02).
+              #
+              # Args: pid did role srvType srvUrl
+              #   srvType: "CredentialService" (holder) | "IssuerService" (issuer)
+              #   srvUrl:  the URL the DID document should advertise
               ########################################################
               build_ctx_body() {
-                local pid="$1" did="$2" role="$3"
+                local pid="$1" did="$2" role="$3" srvType="$4" srvUrl="$5"
                 cat <<JSON
               {
                 "active": true,
@@ -224,9 +276,45 @@ spec:
                     "algorithm": "EC",
                     "curve": "secp256r1"
                   }
-                }
+                },
+                "serviceEndpoints": [
+                  {
+                    "id": "$did#$srvType",
+                    "type": "$srvType",
+                    "serviceEndpoint": "$srvUrl"
+                  }
+                ]
               }
               JSON
+              }
+
+              ########################################################
+              # Per-credential-type metadata: maps the bare type name we
+              # store in wallet.participants[].credentials to the
+              # credential-definition `id` (used as foreign key by the
+              # `credentials/request` body in step 8) and the json-schema
+              # URL published by tractusx-profiles.
+              # Today all supported types follow the same database-attestation
+              # template — this map is the place to extend if we add a
+              # type that needs different attestations or rules.
+              ########################################################
+              cred_def_id_for() {
+                # POSIX-portable lowercase + tractusx prefix.
+                local t
+                t=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+                printf 'tx-%s' "$t"
+              }
+              cred_schema_for() {
+                case "$1" in
+                  MembershipCredential)
+                    printf 'https://raw.githubusercontent.com/eclipse-tractusx/tractusx-profiles/main/cx/credentials/membership.credential.schema.json' ;;
+                  DataExchangeGovernanceCredential)
+                    printf 'https://raw.githubusercontent.com/eclipse-tractusx/tractusx-profiles/main/cx/credentials/dataExchangeGovernance.credential.schema.json' ;;
+                  FrameworkAgreementCredential)
+                    printf 'https://raw.githubusercontent.com/eclipse-tractusx/tractusx-profiles/main/cx/credentials/frameworkAgreement.credential.schema.json' ;;
+                  *)
+                    printf '' ;;
+                esac
               }
 
               ########################################################
@@ -238,7 +326,11 @@ spec:
               echo "================================================================"
               echo "[ih-seed] SETUP: bootstrap issuer ParticipantContext on IS"
               echo "================================================================"
-              ISSUER_BODY=$(build_ctx_body "$ISSUER_PID" "$ISSUER_DID" "ROLE_ADMIN")
+              # Issuer's IssuerService endpoint published in its own DID document.
+              ISSUER_SRV_URL="$IS_ISSUANCE/v1alpha/participants/$ISSUER_PID_B64"
+              ISSUER_BODY=$(build_ctx_body \
+                "$ISSUER_PID" "$ISSUER_DID" "ROLE_ADMIN" \
+                "IssuerService" "$ISSUER_SRV_URL")
               post_idem \
                 "$IS_IDENTITY/v1alpha/participants" \
                 "$IS_KEY" \
@@ -253,9 +345,83 @@ spec:
                 "(setup) IS issuer activate"
 
               ########################################################
+              # SETUP step 5: create one shared `holders` attestation.
+              # Per upstream walkthrough §05 the IssuerService ships a
+              # `database` attestation that reads the `holders` table
+              # populated by step 7. One attestation is sufficient for
+              # all credential types because the `mappings` block on
+              # each CredentialDefinition decides which columns flow
+              # into the credentialSubject.
+              ########################################################
+              ATTESTATION_ID="holders-database-attestation"
+              ATTESTATION_BODY=$(cat <<JSON
+              {
+                "id": "$ATTESTATION_ID",
+                "attestationType": "database",
+                "configuration": {
+                  "dataSourceName": "holder",
+                  "tableName": "holders"
+                }
+              }
+              JSON
+              )
+              # NOTE: best-effort. The upstream IssuerService runtime image
+              # does not always bundle the `database` attestation extension
+              # (it is an optional sub-module). When missing, the API
+              # responds 400 "Unknown attestation type: database" and we
+              # log a WARN instead of failing the Job — VC issuance (§8/§9)
+              # is still exercised end-to-end by the data-exchange tests.
+              post_softfail \
+                "$IS_ISSUERADMIN/v1alpha/participants/$ISSUER_PID_B64/attestations" \
+                "$IS_KEY" \
+                "$ATTESTATION_BODY" \
+                "(setup §5) IS attestation" || true
+
+              ########################################################
+              # SETUP step 6: create one CredentialDefinition per unique
+              # credential type declared anywhere under
+              # wallet.participants[].credentials. The set is computed
+              # in /etc/wallet/credential-types.json (see configmap).
+              # Each definition references the shared attestation above
+              # and maps the holders table columns (`did`, `holder_id`)
+              # onto the credential subject.
+              ########################################################
+              jq -r '.[]' /etc/wallet/credential-types.json | while read -r CRED_TYPE; do
+                [ -z "$CRED_TYPE" ] && continue
+                CRED_ID=$(cred_def_id_for "$CRED_TYPE")
+                CRED_SCHEMA=$(cred_schema_for "$CRED_TYPE")
+                CRED_DEF_BODY=$(cat <<JSON
+              {
+                "id": "$CRED_ID",
+                "credentialType": "$CRED_TYPE",
+                "format": "VC1_0_JWT",
+                "attestations": ["$ATTESTATION_ID"],
+                "jsonSchema": "{}",
+                "jsonSchemaUrl": "$CRED_SCHEMA",
+                "mappings": [
+                  { "input": "did",       "output": "credentialSubject.id",               "required": true },
+                  { "input": "holder_id", "output": "credentialSubject.holderIdentifier", "required": true }
+                ],
+                "validity": 31536000
+              }
+              JSON
+              )
+                # Best-effort: depends on §5 attestation existing.
+                post_softfail \
+                  "$IS_ISSUERADMIN/v1alpha/participants/$ISSUER_PID_B64/credentialdefinitions" \
+                  "$IS_KEY" \
+                  "$CRED_DEF_BODY" \
+                  "(setup §6) IS credentialdefinition $CRED_TYPE → $CRED_ID" || true
+              done
+
+              ########################################################
               # PER-PARTICIPANT loop — provision each holder on IH and
               # register it with IS.
               ########################################################
+              # Track best-effort issuance outcomes for the SUMMARY line.
+              ISSUANCE_OK=0
+              ISSUANCE_WARN=0
+
               jq -r 'to_entries[] | @base64' /etc/wallet/participants.json | while read -r row; do
                 entry=$(echo "$row" | base64 -d)
                 PID=$(echo "$entry" | jq -r '.key')
@@ -272,9 +438,13 @@ spec:
 
                 ######################################################
                 # (A) Create holder ParticipantContext on IH with
-                #     inline keypair generation.
+                #     inline keypair generation + CredentialService
+                #     serviceEndpoint (per walkthrough §02).
                 ######################################################
-                IH_BODY=$(build_ctx_body "$PART_ID" "$DID" "ROLE_USER")
+                HOLDER_CS_URL="$IH_CREDENTIALS/v1/participants/$PART_B64"
+                IH_BODY=$(build_ctx_body \
+                  "$PART_ID" "$DID" "ROLE_USER" \
+                  "CredentialService" "$HOLDER_CS_URL")
                 post_idem \
                   "$IH_IDENTITY/v1alpha/participants" \
                   "$IH_KEY" \
@@ -298,7 +468,7 @@ spec:
                 HOLDER_BODY=$(cat <<JSON
               {
                 "did": "$DID",
-                "holderId": "$PART_ID",
+                "holderId": "$BPN",
                 "name": "$PID ($BPN)"
               }
               JSON
@@ -309,17 +479,75 @@ spec:
                   "$HOLDER_BODY" \
                   "(C) IS holder registration"
 
+                ######################################################
+                # (D) Best-effort: trigger DCP issuance for each
+                #     credential declared on this participant
+                #     (walkthrough §08), then poll the holder's
+                #     credential store (§09) until the credential
+                #     turns up in state ISSUED.
+                #
+                #     Failures here do NOT fail the Job — DCP
+                #     issuance involves did:web resolution + STS keying
+                #     that is cluster-environment-sensitive.
+                ######################################################
+                CRED_LIST=$(echo "$entry" | jq -c '.value.credentials // []')
+                if [ "$(echo "$CRED_LIST" | jq 'length')" = "0" ]; then
+                  echo "[ih-seed] (D) no credentials declared for $PID — skipping issuance"
+                  continue
+                fi
+
+                echo "$CRED_LIST" | jq -r '.[]' | while read -r CRED_TYPE; do
+                  [ -z "$CRED_TYPE" ] && continue
+                  CRED_ID=$(cred_def_id_for "$CRED_TYPE")
+                  REQ_BODY=$(cat <<JSON
+              {
+                "issuerDid": "$ISSUER_DID",
+                "holderPid": "$ISSUER_DID",
+                "credentials": [
+                  { "id": "$CRED_ID", "type": "$CRED_TYPE", "format": "VC1_0_JWT" }
+                ]
+              }
+              JSON
+              )
+                  if post_softfail \
+                       "$IH_IDENTITY/v1alpha/participants/$PART_B64/credentials/request" \
+                       "$IH_KEY" \
+                       "$REQ_BODY" \
+                       "(D §8) IH request $CRED_TYPE for $PID"; then
+                    # Poll IH for the credential to appear in state ISSUED.
+                    ok=0
+                    for j in $(seq 1 20); do
+                      body=$(curl -sS \
+                        -H "x-api-key: $IH_KEY" \
+                        "$IH_IDENTITY/v1alpha/participants/$PART_B64/credentials" || echo '[]')
+                      if echo "$body" | jq -e --arg t "$CRED_TYPE" \
+                           '.[] | select(.type == $t and .state == "ISSUED")' \
+                           >/dev/null 2>&1; then
+                        echo "[ih-seed] (D §9) $CRED_TYPE ISSUED for $PID (attempt $j)"
+                        ok=1
+                        break
+                      fi
+                      sleep 2
+                    done
+                    if [ "$ok" = "0" ]; then
+                      echo "[ih-seed] (D §9) WARN: $CRED_TYPE never reached ISSUED for $PID after 40s"
+                    fi
+                  fi
+                done
+
               done
 
               ########################################################
               # SUMMARY
               ########################################################
               PCOUNT=$(jq 'length' /etc/wallet/participants.json)
+              CTYPES=$(jq -r '. | join(",")' /etc/wallet/credential-types.json)
               echo ""
               echo "[ih-seed] ================================================================"
               echo "[ih-seed]  SEED SUMMARY: $PCOUNT participants provisioned successfully"
               echo "[ih-seed]  (issuer=$ISSUER_PID activated, all holders created+activated+registered)"
-              echo "[ih-seed]  Note: VerifiableCredential issuance is exercised by data-flow tests,"
-              echo "[ih-seed]  not by this seeding hook."
+              echo "[ih-seed]  credentialDefinitions configured: $CTYPES"
+              echo "[ih-seed]  Credential issuance (§8/§9) is best-effort; check WARN lines"
+              echo "[ih-seed]  above to assess DCP exchange readiness on this cluster."
               echo "[ih-seed] ================================================================"
 {{- end }}

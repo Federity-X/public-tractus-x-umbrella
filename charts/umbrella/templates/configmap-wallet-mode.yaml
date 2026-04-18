@@ -49,6 +49,7 @@ data:
   # (which is only the bruno-collection variable name).
   issuer-service-internal-identity-api: {{ printf "http://%s:%d/api/identity" $isSvc (int $ports.isIdentity) | quote }}
   issuer-service-internal-issueradmin-api: {{ printf "http://%s:%d/api/admin" $isSvc (int $ports.isIssuerAdmin) | quote }}
+  issuer-service-internal-issuance-api: {{ printf "http://%s:%d/api/issuance" $isSvc (int $ports.isIssuance) | quote }}
   issuer-did: {{ include "umbrella.wallet.issuerDid" (dict "ctx" .) | quote }}
   # The issuer's own ParticipantContext id (used as path segment in
   # /api/issueradmin/v1alpha/participants/{ctx}/holders etc.). The seed
@@ -76,4 +77,15 @@ data:
       }{{- if lt (add $i 1) (len $keys) }},{{- end }}
 {{- end }}
     }
+  # Unique set of credential types declared across all participants —
+  # consumed by the seeding Job to build one CredentialDefinition per
+  # type on the IssuerService (walkthrough §06).
+  credential-types.json: |
+{{- $allTypes := list }}
+{{- range $pid, $p := .Values.wallet.participants }}
+{{-   range $p.credentials }}
+{{-     $allTypes = append $allTypes . }}
+{{-   end }}
+{{- end }}
+    {{ $allTypes | uniq | sortAlpha | toJson }}
 {{- end }}
