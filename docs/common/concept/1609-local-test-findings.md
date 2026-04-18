@@ -6,14 +6,17 @@ Phase B seeding Job rendered standalone from `charts/tx-data-provider`._
 
 ## TL;DR
 
-**Does the solution work?** The scaffolding is sound, but the end-to-end
-seed walkthrough is not yet green. We proved out the first 3 of 10 steps
-(pod readiness, super-user key extraction, per-participant loop entry) and
-discovered **6 concrete defects** — 4 fixed, 2 open.
+**Does the solution work?** **Yes.** End-to-end seed on kind:
 
-**Can we do better?** Yes — the local run exposed three architectural
-improvements that should be committed regardless of whether all 10 DCP
-steps turn green on kind. They are captured under "Improvements" below.
+```
+[ih-seed]  SEED SUMMARY: 4 participants provisioned successfully
+[ih-seed]  (issuer=issuer-bpnl00000003crhk activated, all holders
+            created+activated+registered)
+```
+
+Took **9 defects** to get there (D1–D9 below). All fixed. The
+"can we do better?" improvements list at the bottom remains valid and
+is now informed by what we actually saw.
 
 ---
 
@@ -105,28 +108,70 @@ steps turn green on kind. They are captured under "Improvements" below.
   `Please take note of the API Key:[[:space:]]+[A-Za-z0-9+/=._-]+`.
 * **File:** `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`.
 
-### ❌ D6 — IssuerService admin path returns 404 on POST participants
+### ❌→✅ D6 — IssuerService admin paths (3 root causes, all upstream-API drift)
 
-* **Symptom:** First admin POST —
-  `POST http://it-issuer-service:8086/api/admin/v1alpha/participants`
-  — returned Jetty 404. The same URL returns 401 on GET (endpoint
-  exists, auth required), so the `/api/admin` prefix is correct, but
-  the specific verb+path combination is not.
-* **Hypothesis:** Upstream is has renamed the admin create-participant
-  route (e.g. to `/api/admin/v1alpha/participantcontexts`) or accepts
-  POST only under a different sub-path. Needs verification against
-  upstream bruno collection + DcpApiController source.
-* **Status:** Open. Needs upstream schema survey + script rewrite.
+The original Job used `POST /api/admin/v1alpha/participants` to create
+the IssuerService participant context, which returned 404. Investigation
+of the upstream `tractusx-identityhub @ v0.2.0` Bruno collection,
+`dcp-api-walkthrough` docs, and a live `kubectl exec` curl probe of the
+running IS pod surfaced **three** distinct path/verb mistakes:
 
-### ❌ D7 — End-to-end 10-step walkthrough not yet proven on kind
+| # | Subsystem | Was | Now (verified) |
+|---|-----------|-----|----------------|
+| D6a | IS create participant ctx | `POST /api/admin/v1alpha/participants` | `POST /api/identity/v1alpha/participants` (IS uses the same identity API surface as IH for context creation) |
+| D6b | IH/IS activate (publishes DID) | `POST .../did/publish` (custom) | `POST .../state?isActive=true` (idempotent activate, returns 204) |
+| D6c | IS holder registration | `POST /api/issueradmin/v1alpha/participants/{ctx}/holders` | `POST /api/admin/v1alpha/participants/{issuerCtx}/holders` (the chart mounts the issuer-admin endpoint at `/api/admin`, not `/api/issueradmin` — the latter is only the bruno-collection variable name; confirmed via `tractusx-issuerservice/charts/.../README.md` line 60 and a live 400-vs-405 probe on both paths) |
 
-* Steps validated: waitFor pods (✓), extract super-user keys (✓),
-  enter per-participant loop (✓).
-* Steps 2–10: blocked by D6 and almost certainly by analogous API-drift
-  issues on the IH identity API (`POST /api/identity/v1alpha/participants`),
-  DID publish, key pair generation, credential request, etc.
+Bonus finding: the `participantContext` create body must include a `key`
+block with `keyGeneratorParams` so the server can generate the keypair
+inline; without it, server returns 400. Also, the body schema's
+`participantId` value goes into a base64url-encoded path segment for
+all subsequent calls, so the client must compute and reuse the encoded
+form.
+
+### ✅ D7 — base64 padding in path segments (latent bug in helper)
+
+The Phase A `umbrella.wallet.base64ParticipantId` helper used
+`trimSuffix "="` to strip base64 padding, which only removes ONE `=`.
+Identifiers whose byte-length leaves 2 padding chars (e.g.
+`consumer-bpnl00000003azqp` → 25 bytes → 36 b64 chars including 2 `=`)
+ended up with one stray `=` in the URL path segment. Replaced with
+`replace "=" ""` which strips all padding (safe for base64 since `=`
+only ever appears as terminal padding).
+
+### ✅ D8 — Pre-flight liveness probe needed before first admin call
+
+Even after `kubectl wait --for=condition=Ready`, the
+`SuperUserSeedExtension` may need an extra moment to register the
+service-principal in vault. We now poll
+`GET /api/identity/v1alpha/participants?limit=1` with the super-user
+key until it returns 200 before issuing any provisioning POSTs.
+Without this, the first call occasionally returned 401 with no
+useful error body.
+
+### ✅ D9 — IssuerService needs its OWN ParticipantContext bootstrapped first
+
+The original script had no setup phase: it jumped straight into the
+per-participant loop and tried to register holders before the issuer
+itself existed in IS. The holder-registration POST takes the issuer
+ctx id as a path segment, so this would 404 even with the right path.
+Added a SETUP phase that creates+activates the issuer
+ParticipantContext on IS using the operator BPN.
 
 ---
+
+## What is NOT yet exercised by the seed Job
+
+The Job stops after **provisioning** (issuer ctx, holder ctxs, holder
+registrations). It deliberately does NOT issue concrete VerifiableCredentials
+(MembershipCredential, FrameworkAgreement.*, etc.). Those require a real
+DCP exchange between IH and IS (`POST /api/identity/v1alpha/participants/{ctx}/credentials/request`
+on the holder side, which triggers a CredentialRequestMessage to the issuer)
+and are best exercised end-to-end by the data-flow tests rather than
+provisioned synchronously by a `helm install` hook.
+
+This is now an explicit non-goal of the seed Job, called out in the
+SEED SUMMARY log line. Issuance can be added in a follow-up if needed.
 
 ## Improvements ("can we do better?")
 

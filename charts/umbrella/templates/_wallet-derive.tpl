@@ -28,7 +28,7 @@
 {{- end -}}
 
 {{- define "umbrella.wallet.base64ParticipantId" -}}
-{{- include "umbrella.wallet.participantIdFor" . | b64enc | trimSuffix "=" | replace "+" "-" | replace "/" "_" -}}
+{{- include "umbrella.wallet.participantIdFor" . | b64enc | replace "=" "" | replace "+" "-" | replace "/" "_" -}}
 {{- end -}}
 
 {{/* ---------------- DID ----------------------------------------------------- */}}

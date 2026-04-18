@@ -127,12 +127,16 @@ wallet:
       internalIdentityHubService: "identity-hub"         # -> <release>-identity-hub
       internalIssuerServiceService: "issuer-service"     # -> <release>-issuer-service
       # Port map (matches identity-hub / tractusx-issuerservice-memory v0.2.0).
+      # NOTE: IS exposes BOTH a tenant identity API (`/api/identity` on 8087)
+      # AND an issuer-admin API (`/api/admin` on 8086). The latter is named
+      # `issueradmin` in bruno docs but mounted at `/api/admin` per the
+      # tractusx-issuerservice chart README.
       ports:
         ihIdentity: 8081        # /api/identity
         ihCredentials: 8082     # /api/credentials
         ihDid: 8083             # /
         ihSts: 8087             # /api/sts
-        isIssuerAdmin: 8086     # /api/admin
+        isIssuerAdmin: 8086     # /api/admin   (note: NOT /api/issueradmin)
         isIdentity: 8087        # /api/identity
         isIssuance: 8082        # /api/issuance
     perParticipant:

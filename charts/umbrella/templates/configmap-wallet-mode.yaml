@@ -41,9 +41,20 @@ data:
   identity-hub-internal-identity-api: {{ printf "http://%s:%d/api/identity" $ihSvc (int $ports.ihIdentity) | quote }}
   identity-hub-internal-credentials-api: {{ printf "http://%s:%d/api/credentials" $ihSvc (int $ports.ihCredentials) | quote }}
   identity-hub-internal-sts-url: {{ printf "http://%s:%d/api/sts" $ihSvc (int $ports.ihSts) | quote }}
-  issuer-service-internal-admin-api: {{ printf "http://%s:%d/api/admin" $isSvc (int $ports.isIssuerAdmin) | quote }}
+  # IssuerService split: the tenant identity API is used to bootstrap the
+  # issuer's own ParticipantContext; the issuer-admin API is used to
+  # register holders + define credentials. Confirmed against the upstream
+  # `tractusx-issuerservice` chart README — the issuer-admin endpoint
+  # is mounted at `/api/admin` (port 8086), NOT `/api/issueradmin`
+  # (which is only the bruno-collection variable name).
   issuer-service-internal-identity-api: {{ printf "http://%s:%d/api/identity" $isSvc (int $ports.isIdentity) | quote }}
+  issuer-service-internal-issueradmin-api: {{ printf "http://%s:%d/api/admin" $isSvc (int $ports.isIssuerAdmin) | quote }}
   issuer-did: {{ include "umbrella.wallet.issuerDid" (dict "ctx" .) | quote }}
+  # The issuer's own ParticipantContext id (used as path segment in
+  # /api/issueradmin/v1alpha/participants/{ctx}/holders etc.). The seed
+  # Job creates this context in its setup phase before the per-holder loop.
+  issuer-participant-id: {{ printf "issuer-%s" (lower .Values.wallet.operatorBpn) | quote }}
+  issuer-participant-id-b64: {{ printf "issuer-%s" (lower .Values.wallet.operatorBpn) | b64enc | replace "=" "" | replace "+" "-" | replace "/" "_" | quote }}
   participants.json: |
 {{- $root := . }}
     {
