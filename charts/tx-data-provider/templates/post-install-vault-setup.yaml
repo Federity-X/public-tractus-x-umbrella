@@ -68,6 +68,27 @@ spec:
 
               wget --header 'Content-Type: application/json' --header 'X-Vault-Token: {{ $vaultToken }}' \
               --post-file=/opt/config/aes-secret.json "{{ $vaultUrl }}/v1/secret/data/tokenEncryptionAesKey"
+              {{- if eq (.Values.wallet.mode | default "stub") "identityHub" }}
+
+              # -----------------------------------------------------------------
+              # Identity Hub wallet mode — write canonical Vault aliases.
+              #
+              # Memory variant (tractusx-identityhub-memory v0.2.0) bootstraps
+              # its initial participant from chart-level config, so these
+              # writes are a no-op for the umbrella test profile. They are
+              # included as the canonical pattern to use when swapping in the
+              # non-memory `tractusx-identityhub` chart, which DOES read keys
+              # from an external Vault (reconfigure the IH chart to point at
+              # `{{ $vaultUrl }}` with token `{{ $vaultToken }}` at that time).
+              #
+              # Aliases written here match the defaults in
+              # charts/identity-and-trust-bundle/values.yaml :: identity-hub.
+              # -----------------------------------------------------------------
+              wget --header 'Content-Type: application/json' --header 'X-Vault-Token: {{ $vaultToken }}' \
+              --post-data '{"data":{"content":"sup3r$3cr3t"}}' "{{ $vaultUrl }}/v1/secret/data/identityhub-api-key"
+              wget --header 'Content-Type: application/json' --header 'X-Vault-Token: {{ $vaultToken }}' \
+              --post-data '{"data":{"content":"operator-sts-secret"}}' "{{ $vaultUrl }}/v1/secret/data/operator-sts-secret-alias"
+              {{- end }}
           volumeMounts:
             - name: config-volume
               mountPath: /opt/config

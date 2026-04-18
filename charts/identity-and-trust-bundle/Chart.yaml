@@ -39,3 +39,24 @@ dependencies:
     version: 0.1.14
     repository: https://eclipse-tractusx.github.io/charts/dev
     condition: ssi-dim-wallet-stub.enabled
+  # -- Tractus-X Identity Hub (in-memory variant) — Eclipse EDC upstream Holder
+  #    Wallet packaged for Tractus-X. Disabled by default; enable ONLY as an
+  #    alternative to `ssi-dim-wallet-stub`. The umbrella validator
+  #    (templates/_wallet-validate.tpl) enforces mutual exclusion.
+  #    The `-memory` variant matches the umbrella's in-memory testing profile
+  #    (no PostgreSQL dependency).
+  #    Source: https://github.com/eclipse-tractusx/tractusx-identityhub
+  - name: tractusx-identityhub-memory
+    alias: identity-hub
+    version: v0.2.0
+    repository: https://eclipse-tractusx.github.io/charts/dev
+    condition: identity-hub.enabled
+  # -- Issuer Service companion to Identity Hub (in-memory variant). Issues
+  #    Verifiable Credentials into each participant's ParticipantContext via
+  #    the DCP Credential Issuance Protocol (CIP). Disabled by default.
+  #    Source: https://github.com/eclipse-tractusx/tractusx-identityhub
+  - name: tractusx-issuerservice-memory
+    alias: issuer-service
+    version: v0.2.0
+    repository: https://eclipse-tractusx.github.io/charts/dev
+    condition: issuer-service.enabled

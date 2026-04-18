@@ -36,6 +36,29 @@ controlplaneManagementUrl: ""  # Override the edc controlplane management url
 dataplaneUrl: ""  # Override the edc dataplane public url
 vaultSetup:
   image: alpine:3.19
+# Wallet implementation selection, mirrored from the umbrella `wallet` block
+# so that templates under charts/tx-data-provider/templates can branch on
+# `.Values.wallet.mode`. Keep in sync with charts/umbrella/values.yaml.
+wallet:
+  mode: stub
+  # Name of the ConfigMap (rendered by the umbrella chart) that carries
+  # derived wallet data (participants.json, endpoint URLs, issuer DID).
+  # Only consumed when wallet.mode=identityHub.
+  derivedConfigMap: ""
+  # IdentityHub seeding hook — implements the 10-step DCP walkthrough
+  # (https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/docs/usage/dcp-api-walkthrough)
+  # against the deployed IdentityHub + IssuerService for every participant
+  # declared in wallet.participants. Idempotent.
+  identityHubSeed:
+    enabled: true
+    image: alpine/k8s:1.31.3
+    # Label selectors used to locate IH / IS pods to read the super-user
+    # API key from stdout logs. Must match the pod labels rendered by the
+    # in-memory IH / IS charts (app.kubernetes.io/name).
+    identityHubPodLabel: "app.kubernetes.io/name=tractusx-identityhub-memory"
+    issuerServicePodLabel: "app.kubernetes.io/name=tractusx-issuerservice-memory"
+    # Maximum seconds to wait for IH/IS pods to become Ready before seeding.
+    readinessTimeoutSeconds: 300
 secrets:
   edc-wallet-secret: changeme
 

@@ -17,6 +17,104 @@
 # SPDX-License-Identifier: Apache-2.0
 # #############################################################################
 ---
+# -----------------------------------------------------------------------------
+# Wallet indirection block (documentation + reference values).
+#
+# Tractus-X supports two wallet implementations:
+#   1. SSI DIM Wallet Stub  (centralized mock, default in this umbrella)
+#   2. Identity Hub         (real DCP-compliant wallet, eclipse-edc/IdentityHub)
+#
+# This block is a *single source of truth for documentation* of which wallet
+# is active and what its endpoints are. Helm values files are plain YAML
+# (not Go templates), so sub-chart values below cannot {{ tpl }}-reference
+# this block directly. Instead, pick a profile:
+#
+#   - charts/values-test-data-exchange.yaml               -> stub (default)
+#   - charts/values-test-data-exchange-identity-hub.yaml  -> Identity Hub
+#
+# Each profile hardcodes the per-subchart wallet URLs consistent with the
+# `wallet.mode` selected here. The mutual-exclusion validator in
+# templates/_wallet-validate.tpl enforces that exactly one wallet chart
+# (ssi-dim-wallet-stub OR identity-hub) is enabled.
+# -----------------------------------------------------------------------------
+wallet:
+  # Active wallet implementation. One of: "stub" | "identityHub".
+  # Must match the wallet chart enabled under identity-and-trust-bundle.
+  mode: stub
+
+  # Operator BPN = trusted issuer for the whole dataspace. Seeded into BDRS
+  # and used as issuer DID by Portal, Credential Issuer, and all EDCs.
+  operatorBpn: "BPNL00000003CRHK"
+
+  # ---------------------------------------------------------------------------
+  # Single source of truth for participants (§5 Phase A of the #1609 plan).
+  #
+  # Consumed by:
+  #   - templates/_wallet-derive.tpl            (helpers compute DID / CS URL / STS URL)
+  #   - tx-data-provider post-install-identityhub-seed Job (creates ParticipantContexts)
+  #
+  # Keys must be stable lowercase slugs (used as k8s label values and API keys).
+  # ---------------------------------------------------------------------------
+  participants:
+    operator:
+      bpn: "BPNL00000003CRHK"
+      role: operator   # operator | provider | consumer
+      # Credential set requested from the IssuerService for this participant.
+      credentials:
+        - MembershipCredential
+        - DataExchangeGovernanceCredential
+        - FrameworkAgreementCredential
+    provider:
+      bpn: "BPNL00000003AYRE"
+      role: provider
+      credentials:
+        - MembershipCredential
+        - DataExchangeGovernanceCredential
+        - FrameworkAgreementCredential
+    consumer1:
+      bpn: "BPNL00000003AZQP"
+      role: consumer
+      credentials:
+        - MembershipCredential
+        - DataExchangeGovernanceCredential
+        - FrameworkAgreementCredential
+    consumer2:
+      bpn: "BPNL00000003AVTH"
+      role: consumer
+      credentials:
+        - MembershipCredential
+        - DataExchangeGovernanceCredential
+        - FrameworkAgreementCredential
+
+  # Endpoint reference for the SSI DIM Wallet Stub (mode=stub).
+  stub:
+    host: "ssi-dim-wallet-stub.tx.test"
+    serviceDns: "ssi-dim-wallet-service"                              # in-cluster Service
+    baseUrl: "http://ssi-dim-wallet-stub.tx.test"
+    stsUrl:  "http://ssi-dim-wallet-stub.tx.test/api/sts"
+    tokenUrl: "http://ssi-dim-wallet-stub.tx.test/oauth/token"
+    credentialServiceUrl: "http://ssi-dim-wallet-stub.tx.test/api"
+    didBase: "did:web:ssi-dim-wallet-stub.tx.test"                    # did:web:<didBase>:<BPN>
+
+  # Endpoint reference for Identity Hub (mode=identityHub).
+  # Two topologies: "shared" (multi-tenant) or "perParticipant" (one IH per BPN).
+  identityHub:
+    topology: shared
+    shared:
+      host: "identity-hub.tx.test"
+      baseUrl: "http://identity-hub.tx.test"
+      stsUrl:  "http://identity-hub.tx.test/api/sts"
+      tokenUrl: "http://identity-hub.tx.test/oauth/token"
+      credentialServiceUrl: "http://identity-hub.tx.test/api"
+      didBase: "did:web:identity-hub.tx.test"
+      issuerServiceHost: "issuer-service.tx.test"
+      issuerServiceBaseUrl: "http://issuer-service.tx.test"
+    perParticipant:
+      # Map BPN -> ingress host for that participant's Identity Hub.
+      # Populated only when topology=perParticipant.
+      hosts: {}
+      # DIDs are constructed as did:web:<hosts[BPN]>:<BPN>
+
 portal:
   enabled: false
   replicaCount: 1

@@ -1,0 +1,68 @@
+{{- /*
+   ServiceAccount + Role + RoleBinding for the IdentityHub seeding Job.
+
+   The Job needs to:
+     - list / get IdentityHub and IssuerService pods (to discover Ready
+       replicas via label selector)
+     - read their stdout logs (to extract the super-user API key that the
+       `SuperUserSeedExtension` prints on first startup — see sig-release
+       #1609 plan §11.3).
+
+   Scoped to the release namespace only; no cluster-level permissions.
+*/ -}}
+{{- if and (eq (.Values.wallet.mode | default "stub") "identityHub") .Values.wallet.identityHubSeed.enabled }}
+{{- $fullName := include "dataprovider.fullname" . -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullName }}-ih-seed
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-ih-seed
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-ih-seed
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullName }}-ih-seed
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ $fullName }}-ih-seed
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

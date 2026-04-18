@@ -1,0 +1,55 @@
+# #############################################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# SPDX-License-Identifier: Apache-2.0
+# #############################################################################
+#
+# Always-rendered ConfigMap that carries the wallet-mode selection as a
+# label on the release. Its primary purpose is to force-run the
+# `umbrella.validateWallet` template on every `helm install` / `helm upgrade`
+# so that misconfigured wallet selections (both wallets enabled, or
+# wallet.mode out of sync with the enabled chart) fail fast with a clear
+# message.
+{{- include "umbrella.validateWallet" . }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-wallet-mode
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    tractusx.eclipse.org/wallet-mode: {{ .Values.wallet.mode | default "stub" | quote }}
+data:
+  wallet-mode: {{ .Values.wallet.mode | default "stub" | quote }}
+  operator-bpn: {{ .Values.wallet.operatorBpn | default "" | quote }}
+{{- if eq .Values.wallet.mode "identityHub" }}
+  identity-hub-base-url: {{ .Values.wallet.identityHub.shared.baseUrl | quote }}
+  identity-hub-identity-api: {{ printf "%s/api/identity" .Values.wallet.identityHub.shared.baseUrl | quote }}
+  issuer-service-base-url: {{ .Values.wallet.identityHub.shared.issuerServiceBaseUrl | quote }}
+  issuer-service-admin-api: {{ printf "%s/api/admin" .Values.wallet.identityHub.shared.issuerServiceBaseUrl | quote }}
+  issuer-service-identity-api: {{ printf "%s/api/identity" .Values.wallet.identityHub.shared.issuerServiceBaseUrl | quote }}
+  issuer-did: {{ include "umbrella.wallet.issuerDid" (dict "ctx" .) | quote }}
+  participants.json: |
+{{- $root := . }}
+    {
+{{- $keys := keys .Values.wallet.participants | sortAlpha }}
+{{- range $i, $pid := $keys }}
+{{- $p := index $root.Values.wallet.participants $pid }}
+{{- $did := include "umbrella.wallet.didFor" (dict "ctx" $root "pid" $pid) }}
+{{- $cs := include "umbrella.wallet.credentialServiceUrl" (dict "ctx" $root "pid" $pid) }}
+{{- $ctxId := include "umbrella.wallet.participantIdFor" (dict "ctx" $root "pid" $pid) }}
+{{- $b64 := include "umbrella.wallet.base64ParticipantId" (dict "ctx" $root "pid" $pid) }}
+      {{ $pid | quote }}: {
+        "bpn": {{ $p.bpn | quote }},
+        "role": {{ $p.role | quote }},
+        "did": {{ $did | quote }},
+        "participantId": {{ $ctxId | quote }},
+        "participantIdB64": {{ $b64 | quote }},
+        "credentialServiceUrl": {{ $cs | quote }},
+        "credentials": {{ $p.credentials | toJson }}
+      }{{- if lt (add $i 1) (len $keys) }},{{- end }}
+{{- end }}
+    }
+{{- end }}

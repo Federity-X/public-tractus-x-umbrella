@@ -1,0 +1,308 @@
+{{- /*
+   Post-install hook: seed IdentityHub + IssuerService with all participants
+   declared in the umbrella chart's `wallet.participants` map.
+
+   Implements the full 10-step DCP walkthrough from upstream tractusx-identityhub:
+   https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/docs/usage/dcp-api-walkthrough
+
+   Flow per participant:
+     1.  Extract super-user API key from IH / IS pod logs (printed at startup
+         by SuperUserSeedExtension).
+     2.  Create IssuerService participant context (POST /api/admin/v1alpha/participants).
+     3.  Create IdentityHub participant context with serviceEndpoints set at
+         creation time (POST /api/identity/v1alpha/participants).
+     4.  Generate participant signing key via IH identity API.
+     5.  Publish DID document (service endpoints + verification method).
+     6.  Register participant + DID with IssuerService holder catalog.
+     7.  For each credential listed under the participant's `credentials`,
+         request issuance from IssuerService (POST /credentials/request).
+     8.  Poll credential request state until ISSUED (terminal states:
+         ISSUED | ISSUANCE_FAILED | REJECTED | ERROR).
+     9.  Verify the credential landed in IH's verifiable credential store
+         (GET /api/identity/v1alpha/participants/{pid}/credentials).
+     10. Emit a final seed-summary log line so downstream tooling can assert
+         success without re-reading per-step output.
+
+   Idempotency: every POST tolerates HTTP 409 (already-exists).
+   Failure semantics: any step 2–9 returning ≥400 and not 409 fails the Job,
+   which in turn fails `helm install`.
+*/ -}}
+{{- if and (eq (.Values.wallet.mode | default "stub") "identityHub") .Values.wallet.identityHubSeed.enabled }}
+{{- $fullName := include "dataprovider.fullname" . -}}
+{{- $seed := .Values.wallet.identityHubSeed -}}
+{{- $cmName := .Values.wallet.derivedConfigMap | default (printf "%s-wallet-mode" .Release.Name) -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullName }}-post-install-identityhub-seed
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    tractusx.eclipse.org/wallet-mode: "identityHub"
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-3"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      name: {{ $fullName }}-ih-seed
+      labels:
+        app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    spec:
+      serviceAccountName: {{ $fullName }}-ih-seed
+      restartPolicy: Never
+      volumes:
+        - name: wallet-data
+          configMap:
+            name: {{ $cmName }}
+      containers:
+        - name: ih-seed
+          image: {{ $seed.image | quote }}
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: wallet-data
+              mountPath: /etc/wallet
+              readOnly: true
+          env:
+            - name: NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: IH_POD_LABEL
+              value: {{ $seed.identityHubPodLabel | quote }}
+            - name: IS_POD_LABEL
+              value: {{ $seed.issuerServicePodLabel | quote }}
+            - name: READINESS_TIMEOUT
+              value: {{ $seed.readinessTimeoutSeconds | quote }}
+          command: ["/bin/bash", "-eu", "-o", "pipefail", "-c"]
+          args:
+            - |
+              set -eu -o pipefail
+
+              IH_BASE=$(cat /etc/wallet/identity-hub-base-url)
+              IH_IDENTITY_API=$(cat /etc/wallet/identity-hub-identity-api)
+              IS_ADMIN=$(cat /etc/wallet/issuer-service-admin-api)
+              IS_IDENTITY=$(cat /etc/wallet/issuer-service-identity-api)
+              ISSUER_DID=$(cat /etc/wallet/issuer-did)
+
+              echo "[ih-seed] identity-hub base        = $IH_BASE"
+              echo "[ih-seed] identity-hub identity    = $IH_IDENTITY_API"
+              echo "[ih-seed] issuer-service admin     = $IS_ADMIN"
+              echo "[ih-seed] issuer-service identity  = $IS_IDENTITY"
+              echo "[ih-seed] issuer did               = $ISSUER_DID"
+
+              ########################################################
+              # Step 0: Wait for IH + IS pods to be Ready.
+              ########################################################
+              echo "[ih-seed] waiting for IH/IS pods to be Ready (timeout=${READINESS_TIMEOUT}s)"
+              kubectl -n "$NAMESPACE" wait \
+                --for=condition=Ready pod \
+                -l "$IH_POD_LABEL" \
+                --timeout="${READINESS_TIMEOUT}s"
+              kubectl -n "$NAMESPACE" wait \
+                --for=condition=Ready pod \
+                -l "$IS_POD_LABEL" \
+                --timeout="${READINESS_TIMEOUT}s"
+
+              ########################################################
+              # Step 1: extract super-user API keys from pod logs.
+              # The SuperUserSeedExtension logs a line of the form:
+              #   "API Key for 'super-user': <base64>.<token>"
+              ########################################################
+              extract_api_key() {
+                local label="$1"
+                local pod
+                pod=$(kubectl -n "$NAMESPACE" get pod -l "$label" \
+                  -o jsonpath='{.items[0].metadata.name}')
+                # api keys are printed once at startup, so grab from full log
+                local key
+                key=$(kubectl -n "$NAMESPACE" logs "$pod" --tail=-1 \
+                  | grep -oE "API Key for '[^']*':[[:space:]]+[A-Za-z0-9_\.\-]+" \
+                  | head -n1 \
+                  | sed -E "s/.*:[[:space:]]+//")
+                if [ -z "$key" ]; then
+                  echo "[ih-seed] FATAL: could not extract super-user API key from pod $pod" >&2
+                  kubectl -n "$NAMESPACE" logs "$pod" --tail=40 >&2 || true
+                  exit 1
+                fi
+                printf '%s' "$key"
+              }
+
+              IH_KEY=$(extract_api_key "$IH_POD_LABEL")
+              IS_KEY=$(extract_api_key "$IS_POD_LABEL")
+              echo "[ih-seed] IH super-user key  = ${IH_KEY:0:8}..."
+              echo "[ih-seed] IS super-user key  = ${IS_KEY:0:8}..."
+
+              ########################################################
+              # Helper: POST json, accept 2xx and 409.
+              ########################################################
+              post_idem() {
+                local url="$1" key="$2" body="$3" ctx="$4"
+                local code
+                code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+                  -X POST "$url" \
+                  -H "Content-Type: application/json" \
+                  -H "x-api-key: $key" \
+                  -d "$body") || true
+                case "$code" in
+                  2??) echo "[ih-seed] $ctx  OK ($code)";;
+                  409) echo "[ih-seed] $ctx  already exists (409, idempotent)";;
+                  *)
+                    echo "[ih-seed] $ctx  FAILED ($code)" >&2
+                    cat /tmp/resp.json >&2 || true
+                    return 1
+                    ;;
+                esac
+              }
+
+              ########################################################
+              # Iterate participants from the derived ConfigMap.
+              ########################################################
+              jq -r 'to_entries[] | @base64' /etc/wallet/participants.json | while read -r row; do
+                entry=$(echo "$row" | base64 -d)
+                PID=$(echo "$entry" | jq -r '.key')
+                BPN=$(echo "$entry" | jq -r '.value.bpn')
+                ROLE=$(echo "$entry" | jq -r '.value.role')
+                DID=$(echo "$entry" | jq -r '.value.did')
+                PART_ID=$(echo "$entry" | jq -r '.value.participantId')
+                PART_B64=$(echo "$entry" | jq -r '.value.participantIdB64')
+                CS_URL=$(echo "$entry" | jq -r '.value.credentialServiceUrl')
+
+                echo ""
+                echo "================================================================"
+                echo "[ih-seed] participant=$PID role=$ROLE bpn=$BPN did=$DID"
+                echo "================================================================"
+
+                ######################################################
+                # Step 2: create IssuerService participant context.
+                ######################################################
+                post_idem \
+                  "$IS_ADMIN/v1alpha/participants" \
+                  "$IS_KEY" \
+                  "{\"participantId\":\"$PART_ID\",\"did\":\"$DID\",\"roles\":[\"$ROLE\"]}" \
+                  "(2) IS participant-context"
+
+                ######################################################
+                # Step 3: create IH participant context with service
+                # endpoints set at creation time (per plan §11.1).
+                ######################################################
+                IH_BODY=$(cat <<JSON
+              {
+                "participantId": "$PART_ID",
+                "did": "$DID",
+                "active": true,
+                "serviceEndpoints": [
+                  {
+                    "type": "CredentialService",
+                    "serviceEndpoint": "$CS_URL"
+                  }
+                ]
+              }
+              JSON
+              )
+                post_idem \
+                  "$IH_IDENTITY_API/v1alpha/participants" \
+                  "$IH_KEY" \
+                  "$IH_BODY" \
+                  "(3) IH participant-context"
+
+                ######################################################
+                # Step 4: generate signing key for the participant.
+                ######################################################
+                post_idem \
+                  "$IH_IDENTITY_API/v1alpha/participants/$PART_B64/keypairs" \
+                  "$IH_KEY" \
+                  "{\"keyId\":\"$PART_ID-key-1\",\"active\":true,\"useDuration\":-1}" \
+                  "(4) IH keypair"
+
+                ######################################################
+                # Step 5: publish DID document.
+                ######################################################
+                post_idem \
+                  "$IH_IDENTITY_API/v1alpha/participants/$PART_B64/did/publish" \
+                  "$IH_KEY" \
+                  "{}" \
+                  "(5) IH DID publish"
+
+                ######################################################
+                # Step 6: register participant as holder in IssuerService.
+                ######################################################
+                post_idem \
+                  "$IS_ADMIN/v1alpha/participants/$PART_ID/holders" \
+                  "$IS_KEY" \
+                  "{\"holderId\":\"$PART_ID\",\"did\":\"$DID\"}" \
+                  "(6) IS holder registration"
+
+                ######################################################
+                # Step 7: request each credential listed for this
+                # participant.
+                ######################################################
+                CREDS=$(echo "$entry" | jq -r '.value.credentials[]')
+                for cred in $CREDS; do
+                  echo "[ih-seed] (7) requesting credential: $cred"
+                  REQ_BODY=$(cat <<JSON
+              {
+                "holderId": "$PART_ID",
+                "credentialType": "$cred",
+                "issuanceFormat": "VC1_0_JWT"
+              }
+              JSON
+              )
+                  post_idem \
+                    "$IS_ADMIN/v1alpha/participants/$PART_ID/credentialrequests" \
+                    "$IS_KEY" \
+                    "$REQ_BODY" \
+                    "(7) IS credential-request [$cred]"
+
+                  ######################################################
+                  # Step 8: poll until terminal state.
+                  ######################################################
+                  for i in $(seq 1 30); do
+                    STATE=$(curl -sS \
+                      -H "x-api-key: $IS_KEY" \
+                      "$IS_ADMIN/v1alpha/participants/$PART_ID/credentialrequests?credentialType=$cred" \
+                      | jq -r '.[0].state // "PENDING"')
+                    case "$STATE" in
+                      ISSUED)
+                        echo "[ih-seed] (8) $cred => ISSUED"
+                        break
+                        ;;
+                      ISSUANCE_FAILED|REJECTED|ERROR)
+                        echo "[ih-seed] (8) $cred => $STATE (FATAL)" >&2
+                        exit 1
+                        ;;
+                      *)
+                        echo "[ih-seed] (8) $cred => $STATE (attempt $i/30)"
+                        sleep 2
+                        ;;
+                    esac
+                  done
+
+                  ######################################################
+                  # Step 9: verify VC stored in IH credential store.
+                  ######################################################
+                  COUNT=$(curl -sS \
+                    -H "x-api-key: $IH_KEY" \
+                    "$IH_IDENTITY_API/v1alpha/participants/$PART_B64/credentials?type=$cred" \
+                    | jq -r 'length // 0')
+                  if [ "$COUNT" -lt 1 ]; then
+                    echo "[ih-seed] (9) FATAL: $cred not present in IH store for $PART_ID" >&2
+                    exit 1
+                  fi
+                  echo "[ih-seed] (9) $cred present in IH store ($COUNT entries)"
+                done
+              done
+
+              ########################################################
+              # Step 10: summary line for downstream assertions.
+              ########################################################
+              PCOUNT=$(jq 'length' /etc/wallet/participants.json)
+              echo ""
+              echo "[ih-seed] ================================================================"
+              echo "[ih-seed]  SEED SUMMARY: $PCOUNT participants seeded successfully"
+              echo "[ih-seed] ================================================================"
+{{- end }}

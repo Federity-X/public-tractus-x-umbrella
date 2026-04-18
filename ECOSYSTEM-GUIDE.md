@@ -56,6 +56,12 @@ A self-sovereign identity string that maps to a participant's BPN. The DID forma
 | SSI DIM Wallet Stub (current) | `did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AYRE` | All DIDs resolve to the single stub host |
 | Identity Hub (production) | `did:web:identity-hub-provider.tx.test:BPNL00000003AYRE` | Each DID resolves to the participant's own Identity Hub |
 
+> **In-cluster vs ingress DID form**: The umbrella uses two forms of wallet-stub DID depending on the profile:
+> - **Default** (`charts/umbrella/values.yaml`): `did:web:ssi-dim-wallet-stub.tx.test:<BPN>` (ingress hostname, used when consumers/providers resolve DIDs through the cluster ingress).
+> - **`values-test-data-exchange.yaml`**: `did:web:ssi-dim-wallet-service:<BPN>` (in-cluster Kubernetes Service DNS, used so EDCs resolve DIDs without going through ingress).
+>
+> Both are valid — `did:web` simply specifies a host from which `/.well-known/did.json` is fetched. Which form to use depends on whether the client is inside or outside the cluster.
+
 > **Key insight**: With the stub, every participant's DID resolves through one centralized service. With Identity Hub, each participant's DID resolves through their own wallet — which is the whole point of **decentralized** identity.
 
 ### EDC (Eclipse Dataspace Connector)
@@ -296,6 +302,7 @@ Plus adds **post-install hooks** for:
   - **Status list** — Credential revocation checking
 - Seeds wallets for all configured BPNs on startup
 - The **operator** BPN (`BPNL00000003CRHK`) acts as the trusted issuer
+- **Token expiry is very short**: `tokenExpiryTime: "5"` (seconds) by default — see `charts/identity-and-trust-bundle/values.yaml`. Relevant when debugging DCP timeouts; real wallets have much longer TTLs.
 
 ### 6.5 BPDM (Business Partner Data Management)
 Runs 4 interconnected services under `business-partners.tx.test`:
@@ -309,15 +316,16 @@ Flow: Gate receives data → Orchestrator coordinates → Cleaning validates →
 ### 6.6 Discovery Services
 | Service | URL | Purpose |
 |---------|-----|---------|
-| BPN Discovery | `semantics.tx.test/bpndiscovery` | Given a part number (OEN, WMI), find the BPN of the manufacturer |
+| BPN Discovery | `semantics.tx.test/bpndiscovery` | Generic `keyType + keyValue → BPN` lookup. Supported key types include `oen`, `wmi`, `manufacturerPartId`, etc. (i.e., OEN/WMI are key **types**, not "part numbers"). |
 | Discovery Finder | `semantics.tx.test/discoveryfinder` | Given a discovery type, find the discovery endpoint URL |
 
 Discovery Finder registers BPN Discovery as an endpoint. Applications query Discovery Finder first to learn where to resolve BPNs.
 
 ### 6.7 BDRS Server (BPN→DID Resolution)
 - In-memory server mapping BPNs to DIDs
-- Seeded via post-install hook with all 17 BPN↔DID pairs
-- EDC connectors query this to resolve a partner's DID from their BPN
+- Seeded via post-install hook with **17 BPN↔DID pairs** (15 `BPNL…` legal entities + 2 `BPNS…` sites) — see `bdrs-server-memory.seeding.bpnList` in `charts/umbrella/values.yaml`
+- The Portal database is seeded with **16 companies** (legal entities only). The delta vs BDRS is the 2 extra site entries (`BPNS…`) plus the operator BPN `BPNL00000003CRHK`, minus consumers that appear in the company list but not in the data-plane BDRS seed on every profile — always cross-check against the active values file
+- EDC connectors query BDRS to resolve a partner's DID from their BPN
 
 ### 6.8 Simple Data Backend
 **Location**: `simple-data-backend/`
@@ -386,36 +394,39 @@ Step 5: Contract negotiation proceeds
 
 ### Key Identity Configuration per EDC
 
-Each EDC connector is configured with:
+Each EDC connector is configured with (keys shown are those **actually in use** by `tractusx-connector` 0.11.2, which is the version pinned in this umbrella):
+
 ```yaml
 participant:
   id: BPNL00000003AZQP            # Their BPN
-dcp:                                # (recently renamed from "iatp" → PR #2684 in tractusx-edc)
+iatp:                             # Conceptually "DCP"; schema key in this chart version is still `iatp`
+  id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AZQP
   trustedIssuers:
-    - id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003CRHK    # Operator DID
+    - did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003CRHK      # Operator DID
   sts:
-    div:                            # (recently renamed from "dim" → "div" for Decentralized Identity Verification)
-      url: http://ssi-dim-wallet-stub.tx.test/api/sts          # Where to get tokens
+    dim:                          # Conceptually "DIV"; schema key in this chart version is still `dim`
+      url: http://ssi-dim-wallet-stub.tx.test/api/sts           # Where to get tokens
     oauth:
       token_url: http://ssi-dim-wallet-stub.tx.test/oauth/token
       client:
         id: BPNL00000003AZQP
         secret_alias: edc-wallet-secret                         # Stored in Vault
-  didService:
-    selfRegistration:
-      enabled: false                # Whether the connector auto-registers its DID
-  cache:
-    enabled: true                   # VP cache for performance
-    validity: 86400                 # Cache TTL in seconds (24h)
+controlplane:
+  env:
+    TX_IAM_IATP_CREDENTIALSERVICE_URL: http://ssi-dim-wallet-stub.tx.test/api
+  bdrs:
+    server:
+      url: http://bdrs-server:8081
+      # Upstream default cache.validity is 600 seconds (10 min) for BDRS entries.
 ```
 
-> **Note**: tractusx-edc recently renamed `iatp` → `dcp` and `dim` → `div` (PR #2684, June 2025). Older configs and docs may still use the old names.
+> **Naming note**: Upstream EDC renamed the **concept** `IATP` → `DCP` (adopted in the Eclipse DCP proposal, 2024) and later the tractusx-edc `tx-dcp-sts-dim` module was renamed to `tx-dcp-sts-div`. However, as of `tractusx-connector` 0.11.2 used here, the **Helm values schema still uses `iatp` and `sts.dim`** — the rename is at the documentation / module level, not the config key level. Always cross-check `iatp` vs `dcp` and `dim` vs `div` against the specific tractusx-edc version you are on before editing values files.
 
 ---
 
 ### How DCP Changes When Identity Hub Replaces the Wallet Stub
 
-The SSI DIM Wallet Stub is a **centralized mock** — one service fakes wallet behaviour for all participants. Identity Hub is the **real DCP-compliant wallet** from the Eclipse Tractus-X project. Switching to it fundamentally changes the trust architecture.
+The SSI DIM Wallet Stub is a **centralized mock** — one service fakes wallet behaviour for all participants. Identity Hub is the **real DCP-compliant wallet** from the upstream Eclipse EDC project (`eclipse-edc/IdentityHub`), consumed by Tractus-X. Switching to it fundamentally changes the trust architecture.
 
 #### What is Identity Hub?
 
@@ -593,6 +604,8 @@ dcp:
 
 With the stub, credentials don't really exist — the stub pretends they do. With Identity Hub, there's a real **credential lifecycle** managed by the `VerifiableCredentialManager` with a full state machine:
 
+> **Caveat**: The state names and transitions below reflect the `VerifiableCredentialResource.State` enum in `eclipse-edc/IdentityHub` at the time of writing. The EDC team refactors this area periodically — verify against the current enum in the upstream repo before quoting this in production docs.
+
 ```
 VerifiableCredentialResource State Machine:
 ┌─────────┐   request   ┌────────────┐  response   ┌───────────┐  issue   ┌────────┐
@@ -648,12 +661,12 @@ The complete flow before data exchange can work:
 
 #### Deployment Architecture Impact
 
-The Identity Hub architecture document defines **two official deployment topologies**:
+The upstream `eclipse-edc/IdentityHub` architecture document defines **two official deployment topologies**:
 
 1. **Embedded**: Identity Hub runs inside the EDC control-plane runtime (same JVM process)
 2. **Standalone**: Identity Hub runs as a separate single or clustered runtime
 
-In the umbrella chart context, this translates to three practical options:
+> **Caveat**: The three sub-options below (A / B / C) are **possible future umbrella topologies**, not officially defined Tractus-X umbrella configurations yet. Tractus-X 26.03 added Identity Hub (Holder Wallet) and Issuer Service Helm charts, but the umbrella on this branch still ships the SSI DIM Wallet Stub by default. The diagrams below are sketches for a future dual-wallet umbrella — treat them as design options, not shipped profiles.
 
 ```
 CURRENT (1 stub serves all):
@@ -723,9 +736,9 @@ The tractusx-edc repository (`eclipse-tractusx/tractusx-edc`) provides the EDC D
 | Extension | Purpose |
 |-----------|---------|
 | `cx-dcp` | **Catena-X scope extractors** — extracts credential scopes from EDC policies (e.g., maps a `MembershipCredential` policy constraint to a DCP scope string like `org.eclipse.tractusx.vc.type:MembershipCredential:read`) |
-| `tx-dcp` | **Tractus-X DCP core** — Tractus-X-specific DCP implementation (DSP 0.8 protocol support) |
-| `tx-dcp-sts-div` | **STS DIV client** — the client that talks to Identity Hub's STS endpoint to request SI tokens. "DIV" = Decentralized Identity Verification (recently renamed from "DIM") |
-| `verifiable-presentation-cache` | **VP caching** — caches resolved Verifiable Presentations for performance; configurable TTL (default 24h) |
+| `tx-dcp` | **Tractus-X DCP integration** — Tractus-X-specific DCP wiring (scope mapping, trust configuration, presentation flow). Note: DCP is the identity/claims protocol; **DSP** (Dataspace Protocol) is the separate data-plane protocol handled by the core EDC dsp modules. |
+| `tx-dcp-sts-div` | **STS client** for Identity Hub's STS endpoint — requests SI tokens. The module was renamed from `tx-dcp-sts-dim` → `tx-dcp-sts-div` in tractusx-edc; the expansion of "DIV" is **not officially defined in upstream docs** (do not assume "Decentralized Identity Verification"). |
+| `verifiable-presentation-cache` | **VP caching** — caches resolved Verifiable Presentations for performance. Cache validity is configurable per key; there is **no single fixed default** — verify against the tractusx-edc version in use. |
 
 Additional DCP-related extensions in tractusx-edc:
 
@@ -738,7 +751,7 @@ Additional DCP-related extensions in tractusx-edc:
 | `edc-extensions/token-interceptor/` | Intercepts and enriches tokens in the DCP flow |
 | `edc-extensions/tokenrefresh-handler/` | Handles token refresh logic for long-running transfers |
 
-The Identity Hub's DCP protocol implementation (`eclipse-edc/IdentityHub`, `protocols/dcp/`) contains:
+The Identity Hub's DCP protocol implementation (`eclipse-edc/IdentityHub`, `protocols/dcp/`) contains the following modules (names current at time of writing; this area is refactored periodically — verify against the upstream repo before citing):
 
 | Module | Purpose |
 |--------|---------|
@@ -777,6 +790,88 @@ Key concepts:
 1. Transitioning from ROTATED → REVOKED
 2. Removing the verification method from the DID document
 3. Publishing the updated DID document
+
+---
+
+### 7.x Adjacent Protocols and Concepts (Often Asked About)
+
+These aren't covered in depth above but matter for anyone doing real data-exchange work on Tractus-X:
+
+#### DSP — Dataspace Protocol (distinct from DCP)
+- DSP is the **data-plane / contract-negotiation** protocol between EDCs. DCP is the **identity/claims** protocol. They are layered, not the same thing.
+- Version matters: `tractusx-connector` 0.11.2 used here targets a modern DSP version. The `tractusx-edc` 0.12 / 0.13 line **dropped support for DSP 0.8** in favour of newer DSP revisions — cross-check the DSP version when upgrading the connector chart.
+
+#### EDR — Endpoint Data Reference
+- The artifact a **consumer** receives after a successful transfer process initiation. It contains the actual endpoint URL + a short-lived access token the consumer uses to fetch data from the provider's data plane.
+- Without an EDR, "contract agreed" means nothing — the EDR is what the consumer application actually consumes.
+- Delivered via callback or pulled from the consumer control plane's `/edrs` endpoint.
+
+#### ODRL / Policy Engine
+- Policies in Tractus-X are expressed in **ODRL** (Open Digital Rights Language).
+- The EDC `PolicyEngine` evaluates policies at three key points: catalog filtering, contract negotiation, and transfer initiation.
+- Tractus-X defines specific policy constraints (e.g., `FrameworkAgreement.traceability`, `Membership`) via the `cx-policy` extension.
+- For production, policy design is where most real-world governance complexity lives — far more than the transport protocol.
+
+#### Token Refresh (tokenrefresh-handler)
+- For long-running transfers (streaming, large datasets), the short-lived EDR access token would expire mid-transfer.
+- The `tokenrefresh-handler` extension in tractusx-edc handles refreshing these tokens transparently via a refresh endpoint exposed by the provider's data plane.
+- Relevant config: refresh endpoint, refresh token expiry, and the Vault-stored signing keys used to mint new access tokens.
+
+---
+
+### 7.y Choosing a Wallet Implementation (Stub vs Identity Hub)
+
+The umbrella supports **two wallet implementations as peers**. Which one is active is controlled by a single top-level `wallet.mode` in `charts/umbrella/values.yaml` plus a corresponding Helm chart toggle in `charts/identity-and-trust-bundle`.
+
+| Mode | Chart enabled under `identity-and-trust-bundle` | Profile file |
+|---|---|---|
+| `stub` (default) | `ssi-dim-wallet-stub.enabled: true` | `charts/values-test-data-exchange.yaml` |
+| `identityHub` | `identity-hub.enabled: true`, `issuer-service.enabled: true` | `charts/values-test-data-exchange-identity-hub.yaml` |
+
+#### How the toggle works
+
+- **Mutual exclusion** is enforced by a Helm template validator at `charts/umbrella/templates/_wallet-validate.tpl`. If both wallets are enabled, or if `wallet.mode` is out of sync with which chart is enabled, `helm install` fails with a clear error.
+- The always-rendered `configmap-wallet-mode.yaml` carries the active mode as a label (`tractusx.eclipse.org/wallet-mode`) so operators can see which wallet any deployed release is using.
+- Each aliased `tx-data-provider` instance (`dataconsumerOne`, `dataconsumerTwo`, provider) also reads `wallet.mode` so it can conditionally render Identity-Hub-specific post-install hooks.
+
+#### What changes between the two profiles
+
+| Config area | `stub` profile | `identityHub` profile |
+|---|---|---|
+| `iatp.id` (per EDC) | `did:web:ssi-dim-wallet-stub.tx.test:<BPN>` (or `ssi-dim-wallet-service:<BPN>` in-cluster) | `did:web:identity-hub.tx.test:<BPN>` |
+| `iatp.trustedIssuers` | Operator DID hosted on stub | Operator DID hosted on Identity Hub (or Issuer Service) |
+| `iatp.sts.dim.url` | `http://ssi-dim-wallet-stub.tx.test/api/sts` | `http://identity-hub.tx.test/api/sts` |
+| `iatp.sts.oauth.token_url` | `…/oauth/token` on stub | `…/oauth/token` on Identity Hub |
+| `TX_IAM_IATP_CREDENTIALSERVICE_URL` | `http://ssi-dim-wallet-stub.tx.test/api` | `http://identity-hub.tx.test/api` |
+| BDRS seeding DIDs | `did:web:ssi-dim-wallet-stub.tx.test:<BPN>` | `did:web:identity-hub.tx.test:<BPN>` |
+| Portal `custodianAddress`, `dimWrapper`, `decentralIdentityManagementAuthAddress`, `issuerdid` | Stub URLs | Identity Hub URLs |
+| `ssi-credential-issuer.walletAddress` | Stub URL | Identity Hub URL |
+| Post-install credential seeding | Not needed (stub fabricates VCs) | `post-install-identityhub-seed.yaml` creates ParticipantContexts and issues `MembershipCredential` etc. |
+
+#### Naming note (important)
+
+The Helm values keys are still `iatp` and `sts.dim` in both profiles because `tractusx-connector` 0.11.2 has not renamed its schema yet. The rename is conceptual (IATP → DCP, DIM → DIV). When the connector chart bumps to a version that actually renames the keys, both profiles need to be updated together.
+
+#### Files you will touch to keep both wallets supported
+
+```
+charts/umbrella/values.yaml                                   # wallet.* block, single source of truth
+charts/umbrella/templates/_wallet-validate.tpl                # mutual-exclusion validator
+charts/umbrella/templates/configmap-wallet-mode.yaml          # always-rendered; triggers validator
+charts/identity-and-trust-bundle/Chart.yaml                   # optional identity-hub + issuer-service deps
+charts/identity-and-trust-bundle/values.yaml                  # default values for both wallet options
+charts/values-test-data-exchange.yaml                         # stub profile (unchanged)
+charts/values-test-data-exchange-identity-hub.yaml            # NEW — Identity Hub profile
+charts/tx-data-provider/values.yaml                           # wallet.mode propagation key
+charts/tx-data-provider/templates/post-install-identityhub-seed.yaml  # NEW — guarded seeding hook
+```
+
+#### What this scaffold does NOT yet do
+
+- **Chart versions for `identity-hub` and `issuer-service` are placeholders** (`0.2.0`). These must be pinned to whatever Tractus-X publishes in the `eclipse-tractusx/charts/dev` registry before `helm dependency build` succeeds against real artifacts.
+- **Identity Hub seeding hook is a scaffold** — it logs TODOs and exits 0. Real implementation must call the Identity API + Issuer Service as documented in §7 above (ParticipantContext → KeyPair → DID publish → CIP issuance → poll until ISSUED).
+- **Per-participant topology** (`wallet.identityHub.topology: perParticipant`) is declared in the values schema but no profile file enables it. A future PR can add `values-test-data-exchange-identity-hub-per-participant.yaml` once one-Identity-Hub-per-BPN is needed.
+- **Vault seeding for Identity Hub keys** still needs to be extended in `post-install-vault-setup.yaml` to write to the path Identity Hub expects for its `KeyPairResource` private keys.
 
 ---
 
@@ -1166,9 +1261,9 @@ Only the **Data Provider (OEM A)** has actual EDC infrastructure deployed with t
 | **BDRS** | BPN/DID Resolution Service — maps BPNs to DIDs |
 | **BPN** | Business Partner Number — unique company identifier |
 | **BPDM** | Business Partner Data Management — golden record system |
-| **DCP** | Decentralized Claims Protocol (formerly IATP) — the protocol for credential presentation between connectors. Recently renamed from IATP in tractusx-edc (PR #2684) |
+| **DCP** | Decentralized Claims Protocol — the protocol for credential presentation between connectors. The concept was renamed from **IATP** upstream (Eclipse DCP proposal, 2024). Note: as of `tractusx-connector` 0.11.2 used here, the **Helm values key is still `iatp`** — the rename is conceptual/module-level. |
 | **DID** | Decentralized Identifier — self-sovereign identity identifier |
-| **DIV** | Decentralized Identity Verification — the renamed STS client in tractusx-edc (previously DIM). The `tx-dcp-sts-div` extension talks to Identity Hub's STS |
+| **DIV** | Name of the renamed STS client module in tractusx-edc (previously `tx-dcp-sts-dim`). The expansion of "DIV" is **not officially defined** in upstream docs — do not assume "Decentralized Identity Verification". The module talks to Identity Hub's STS. As of `tractusx-connector` 0.11.2 the Helm values key is still `sts.dim`. |
 | **DTR** | Digital Twin Registry |
 | **EDC** | Eclipse Dataspace Connector |
 | **Hub API** | Identity Hub's external API — implements the DCP Verifiable Presentation Protocol (Presentation API + Storage API) and Credential Issuance Protocol (Credential Offer API) |
@@ -1189,4 +1284,4 @@ Only the **Data Provider (OEM A)** has actual EDC infrastructure deployed with t
 
 ---
 
-*Generated from codebase analysis of Eclipse Tractus-X Umbrella v3.15.3*
+*Generated from codebase analysis of Eclipse Tractus-X Umbrella v3.15.5 (`charts/umbrella/Chart.yaml`).*

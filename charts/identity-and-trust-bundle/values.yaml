@@ -157,3 +157,101 @@ ssi-dim-wallet-stub:
       enabled: false
       size: 10Gi
       storageClass: standard
+
+# -----------------------------------------------------------------------------
+# Identity Hub (Eclipse EDC upstream Holder Wallet, Tractus-X packaging) —
+# ALTERNATIVE to the stub. Disabled by default. Enable ONLY when
+# `ssi-dim-wallet-stub.enabled=false`. The umbrella mutual-exclusion validator
+# enforces this.
+#
+# The underlying chart is `tractusx-identityhub-memory` v0.2.0 (aliased to
+# `identity-hub` in Chart.yaml). Its schema is documented at:
+#   https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/charts/tractusx-identityhub-memory
+# -----------------------------------------------------------------------------
+identity-hub:
+  # `condition` gate for the dependency in Chart.yaml.
+  enabled: false
+  # The `-memory` variant of the chart can optionally install its own PostgreSQL
+  # and Vault. For the umbrella we keep them off — Vault is provided by each
+  # `tx-data-provider`, and persistence is in-memory for testing.
+  install:
+    postgresql: false
+    vault: false
+  identityhub:
+    # endpoints.* keys match the real chart schema (ports 8080–8087). The
+    # umbrella exposes `identity`, `credentials`, `did`, and `sts` via ingress.
+    endpoints:
+      identity:
+        # Alias under which the Identity API master key is stored in Vault.
+        # The `post-install-identityhub-seed` job uses this same alias value
+        # as the literal `X-Api-Key` header when bootstrapping participants.
+        authKeyAlias: "sup3r$3cr3t"
+      accounts:
+        authKeyAlias: "sup3r$3cr3t"
+    # Initial ParticipantContext created at IH boot. This is the OPERATOR
+    # participant. Additional participants (data provider, consumers) are
+    # created post-install via the Identity API (see tx-data-provider hook).
+    iatp:
+      sts:
+        oauth:
+          client:
+            enabled: true
+            id: "did:web:identity-hub.tx.test:BPNL00000003CRHK"
+            secret: "operator-sts-secret"
+            secret_alias: "operator-sts-secret-alias"
+            x_api_key: "operator-api-key-change-me"
+    didweb:
+      # In-cluster + test ingress uses HTTP, not HTTPS.
+      https: false
+    ingresses:
+      - enabled: true
+        hostname: "identity-hub.tx.test"
+        endpoints:
+          - credentials
+          - did
+          - sts
+        className: "nginx"
+        tls:
+          enabled: false
+      - enabled: true
+        hostname: "identity-hub-admin.tx.test"
+        endpoints:
+          - identity
+          - version
+          - accounts
+        className: "nginx"
+        tls:
+          enabled: false
+
+# -----------------------------------------------------------------------------
+# Issuer Service — companion to Identity Hub (`tractusx-issuerservice-memory`
+# v0.2.0, aliased to `issuer-service`). Issues VCs into each participant's
+# ParticipantContext via the DCP Credential Issuance Protocol (CIP).
+# -----------------------------------------------------------------------------
+issuer-service:
+  enabled: false
+  install:
+    postgresql: false
+    vault: false
+  issuerservice:
+    didweb:
+      https: false
+    ingresses:
+      - enabled: true
+        hostname: "issuer-service.tx.test"
+        endpoints:
+          - issuance
+          - did
+          - statuslist
+        className: "nginx"
+        tls:
+          enabled: false
+      - enabled: true
+        hostname: "issuer-service-admin.tx.test"
+        endpoints:
+          - issueradmin
+          - identity
+          - version
+        className: "nginx"
+        tls:
+          enabled: false
