@@ -83,10 +83,10 @@ spec:
             - |
               set -eu -o pipefail
 
-              IH_BASE=$(cat /etc/wallet/identity-hub-base-url)
-              IH_IDENTITY_API=$(cat /etc/wallet/identity-hub-identity-api)
-              IS_ADMIN=$(cat /etc/wallet/issuer-service-admin-api)
-              IS_IDENTITY=$(cat /etc/wallet/issuer-service-identity-api)
+              IH_BASE=$(cat /etc/wallet/identity-hub-internal-base-url)
+              IH_IDENTITY_API=$(cat /etc/wallet/identity-hub-internal-identity-api)
+              IS_ADMIN=$(cat /etc/wallet/issuer-service-internal-admin-api)
+              IS_IDENTITY=$(cat /etc/wallet/issuer-service-internal-identity-api)
               ISSUER_DID=$(cat /etc/wallet/issuer-did)
 
               echo "[ih-seed] identity-hub base        = $IH_BASE"
@@ -111,7 +111,9 @@ spec:
               ########################################################
               # Step 1: extract super-user API keys from pod logs.
               # The SuperUserSeedExtension logs a line of the form:
-              #   "API Key for 'super-user': <base64>.<token>"
+              #   "[SuperUserSeedExtension] Created user 'super-user'. Please take note of the API Key: <base64>.<token>"
+              # The token segment after `.` may contain base64 chars
+              # including `=`, `+`, `/`.
               ########################################################
               extract_api_key() {
                 local label="$1"
@@ -121,7 +123,7 @@ spec:
                 # api keys are printed once at startup, so grab from full log
                 local key
                 key=$(kubectl -n "$NAMESPACE" logs "$pod" --tail=-1 \
-                  | grep -oE "API Key for '[^']*':[[:space:]]+[A-Za-z0-9_\.\-]+" \
+                  | grep -oE "Please take note of the API Key:[[:space:]]+[A-Za-z0-9+/=._-]+" \
                   | head -n1 \
                   | sed -E "s/.*:[[:space:]]+//")
                 if [ -z "$key" ]; then

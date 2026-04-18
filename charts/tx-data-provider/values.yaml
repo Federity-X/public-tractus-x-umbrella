@@ -54,9 +54,10 @@ wallet:
     image: alpine/k8s:1.31.3
     # Label selectors used to locate IH / IS pods to read the super-user
     # API key from stdout logs. Must match the pod labels rendered by the
-    # in-memory IH / IS charts (app.kubernetes.io/name).
-    identityHubPodLabel: "app.kubernetes.io/name=tractusx-identityhub-memory"
-    issuerServicePodLabel: "app.kubernetes.io/name=tractusx-issuerservice-memory"
+    # upstream IH / IS charts (app.kubernetes.io/name = `identity-hub`
+    # / `issuer-service`, regardless of the `-memory` chart variant).
+    identityHubPodLabel: "app.kubernetes.io/name=identity-hub"
+    issuerServicePodLabel: "app.kubernetes.io/name=issuer-service"
     # Maximum seconds to wait for IH/IS pods to become Ready before seeding.
     readinessTimeoutSeconds: 300
 secrets:

@@ -1,0 +1,196 @@
+# #1609 Phase 9 — Local Deploy & Test Findings
+
+_Ran on macOS + kind (`kind-umbrella-1609`, K8s v1.35.0) against
+`charts/identity-and-trust-bundle` (IH + IS memory, no stub) + the
+Phase B seeding Job rendered standalone from `charts/tx-data-provider`._
+
+## TL;DR
+
+**Does the solution work?** The scaffolding is sound, but the end-to-end
+seed walkthrough is not yet green. We proved out the first 3 of 10 steps
+(pod readiness, super-user key extraction, per-participant loop entry) and
+discovered **6 concrete defects** — 4 fixed, 2 open.
+
+**Can we do better?** Yes — the local run exposed three architectural
+improvements that should be committed regardless of whether all 10 DCP
+steps turn green on kind. They are captured under "Improvements" below.
+
+---
+
+## Environment
+
+| Piece                  | Value                                                 |
+|------------------------|-------------------------------------------------------|
+| Cluster                | kind `umbrella-1609`, 1 node, ports 80/443 mapped     |
+| Ingress                | `kind-example` nginx ingress controller               |
+| Release                | `it` / namespace `umbrella`                           |
+| Chart                  | `charts/identity-and-trust-bundle` (1.1.2)            |
+| IH service             | `it-identity-hub`, ports 8080/8081/8082/8083/8086/8087|
+| IS service             | `it-issuer-service`, ports 8081–8088                  |
+| Seed Job image         | `alpine/k8s:1.31.3`                                   |
+
+---
+
+## Defects found
+
+### ✅ D1 — IH crashlooped on boot (`StringIndexOutOfBoundsException`)
+
+* **Symptom:** IH pod CrashLoopBackOff at startup with
+  `Range [0, -1) out of bounds for length 26` in
+  `InitialParticipantExtension.initialize(...):124`.
+* **Root cause:** The chart's `iatp.sts.oauth.client.x_api_key` defaulted
+  to `operator-api-key-change-me` (26 chars, no `.`). The
+  tractusx-identityhub `InitialParticipantExtension` requires
+  `base64(<participantDid>).<random-token>`; `indexOf('.')` returns `-1`
+  and `substring(0, -1)` throws.
+* **Fix:** Disabled the extension by setting
+  `identity-hub.identityhub.iatp.sts.oauth.client.enabled=false`. We
+  already provision the operator participant from the seed Job using the
+  super-user key — no need for the chart's built-in initial participant.
+  Also replaced the placeholder key with a correctly-formatted one to
+  silence the `SuperUserSeedExtension` warning.
+* **File:** `charts/identity-and-trust-bundle/values.yaml`.
+
+### ✅ D2 — Ingress admission rejected `/.well-known/api`
+
+* **Symptom:** `helm install` failed with
+  `spec.rules[…]path: Invalid value: "/.well-known/api": must be an
+  absolute path … cannot be used with pathType Prefix`.
+* **Root cause:** The `version` endpoint was included in both IH and IS
+  admin ingresses. Ingress-nginx's stricter path validator rejects the
+  `/.well-known/` prefix.
+* **Fix:** Removed `version` from both `ingresses[admin].endpoints` lists.
+  The version endpoint is still exposed in-cluster on its port (for
+  service-to-service health) but not ingressed.
+* **File:** `charts/identity-and-trust-bundle/values.yaml`.
+
+### ✅ D3 — Design flaw: seed Job used public ingress URLs for admin calls
+
+* **Symptom (logical):** Admin traffic (create participant, issue
+  credential) would have traversed the Kubernetes ingress, coupling the
+  seed to DNS + ingress routing being correctly wired. In an
+  air-gapped / staged environment the Job would fail.
+* **Fix:** Split the derived ConfigMap into two URL families:
+  - `*-base-url` / `*-identity-api` / `*-admin-api` — **public** URLs
+    (ingress hostnames), used for `did:web` resolution and cross-EDC
+    traffic.
+  - `*-internal-base-url` / `*-internal-identity-api` / etc. — **internal**
+    URLs (`<release>-<service>:<port>`), used by the seed Job.
+* **Files:** `charts/umbrella/values.yaml` (new `ports:` map +
+  `internal*Service` keys), `charts/umbrella/templates/configmap-wallet-mode.yaml`,
+  `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`.
+
+### ✅ D4 — Wrong pod label selector in seed Job
+
+* **Symptom:** `error: no matching resources found` when the Job tried
+  `kubectl wait --for=condition=Ready pod -l
+  app.kubernetes.io/name=tractusx-identityhub-memory`.
+* **Root cause:** Upstream in-memory charts still use
+  `app.kubernetes.io/name=identity-hub` (and `issuer-service`), **not**
+  the chart-name-suffixed labels we assumed.
+* **Fix:** Updated defaults in
+  `charts/tx-data-provider/values.yaml:identityHubSeed.{identityHubPodLabel,
+  issuerServicePodLabel}`.
+
+### ✅ D5 — Super-user API key grep pattern didn't match real logs
+
+* **Symptom:** Seed Job reached `FATAL: could not extract super-user API
+  key from pod …` after pods became Ready.
+* **Root cause:** Our grep looked for `API Key for 'super-user':` but
+  upstream actually logs
+  `[SuperUserSeedExtension] Created user 'super-user'. Please take note
+  of the API Key: <key>`. Also the key's token segment contains `+`, `/`,
+  `=` (base64) which our `[A-Za-z0-9_\.\-]` class rejected.
+* **Fix:** New regex
+  `Please take note of the API Key:[[:space:]]+[A-Za-z0-9+/=._-]+`.
+* **File:** `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`.
+
+### ❌ D6 — IssuerService admin path returns 404 on POST participants
+
+* **Symptom:** First admin POST —
+  `POST http://it-issuer-service:8086/api/admin/v1alpha/participants`
+  — returned Jetty 404. The same URL returns 401 on GET (endpoint
+  exists, auth required), so the `/api/admin` prefix is correct, but
+  the specific verb+path combination is not.
+* **Hypothesis:** Upstream is has renamed the admin create-participant
+  route (e.g. to `/api/admin/v1alpha/participantcontexts`) or accepts
+  POST only under a different sub-path. Needs verification against
+  upstream bruno collection + DcpApiController source.
+* **Status:** Open. Needs upstream schema survey + script rewrite.
+
+### ❌ D7 — End-to-end 10-step walkthrough not yet proven on kind
+
+* Steps validated: waitFor pods (✓), extract super-user keys (✓),
+  enter per-participant loop (✓).
+* Steps 2–10: blocked by D6 and almost certainly by analogous API-drift
+  issues on the IH identity API (`POST /api/identity/v1alpha/participants`),
+  DID publish, key pair generation, credential request, etc.
+
+---
+
+## Improvements ("can we do better?")
+
+### I1 — Commit the public/internal URL split
+
+The D3 fix is strictly an improvement over the pre-kind design. Even
+once D6/D7 are resolved, this split makes the seed robust under staged
+DNS rollouts, air-gapped clusters, and integration-test harnesses.
+
+### I2 — Move the seed Job out of `tx-data-provider`
+
+Today the 10-step Job lives inside `charts/tx-data-provider`, so you
+cannot exercise it without also pulling in the full data-provider stack
+(EDC connector, postgres, vault, digital-twin registry, etc.). During
+local testing we worked around this by using `helm template … --show-only
+post-install-identityhub-seed.yaml | kubectl apply -f -`, which defeats
+Helm release management.
+
+Propose extracting it into its own subchart (or top-level hook in
+`charts/umbrella`): **`charts/identity-seeding/`**.
+
+Benefits:
+- seed can run in isolation (integration tests, CI smoke)
+- decouples seeding from provider lifecycle (seed once, bring providers
+  up/down freely)
+- clean RBAC: the data-provider SA no longer needs `pods/log` permission
+
+### I3 — Add a pre-flight health probe before step 2
+
+Today we `kubectl wait --for=condition=Ready` and immediately start
+hitting the admin API. The Ready gate only means the container passed
+its readiness probe — it does not guarantee the `SuperUserSeedExtension`
+has finished writing the super-user key to the vault. Add a
+`curl -sf $IH/.well-known/api` (or equivalent light probe) loop before
+attempting any admin call.
+
+### I4 — Validate API paths against a known upstream version in CI
+
+The chart is pinned to IH/IS `0.2.0`, but the 10-step script was written
+from docs. D6 shows we need a version-locked, executable conformance
+test (e.g. a single-participant happy-path run in kind) in CI, so any
+upstream API drift breaks PRs in the umbrella repo before they ship.
+
+### I5 — Consider disabling `InitialParticipantExtension` by default in umbrella
+
+The extension is a tractusx-specific add-on whose semantics (one initial
+participant set from config) are subsumed by our seed Job. Leaving it
+enabled means two code paths fight over the operator participant and
+makes the config schema (`iatp.sts.oauth.client.x_api_key` format)
+fragile. We should document this in the umbrella user guide and keep it
+off.
+
+---
+
+## Files changed in Phase 9 (uncommitted)
+
+| File                                                                                 | Reason          |
+|--------------------------------------------------------------------------------------|-----------------|
+| `charts/identity-and-trust-bundle/values.yaml`                                       | D1, D2          |
+| `charts/umbrella/values.yaml`                                                        | D3, D4          |
+| `charts/umbrella/templates/configmap-wallet-mode.yaml`                               | D3              |
+| `charts/tx-data-provider/values.yaml`                                                | D4              |
+| `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`               | D3, D5          |
+| `docs/common/concept/1609-local-test-findings.md`                                    | this document   |
+
+All six changes are improvements that stand on their own merits
+regardless of the remaining D6/D7 work.

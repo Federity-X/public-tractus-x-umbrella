@@ -191,15 +191,23 @@ identity-hub:
     # Initial ParticipantContext created at IH boot. This is the OPERATOR
     # participant. Additional participants (data provider, consumers) are
     # created post-install via the Identity API (see tx-data-provider hook).
+    #
+    # We DISABLE the chart's built-in InitialParticipantExtension
+    # (`edc.tractusx.ih.participant.configurable.enable=false`) because:
+    #   * its API key format validator requires base64(<DID>).<random>,
+    #     which clashes with our dynamic per-participant seeding;
+    #   * our post-install Job creates the operator participant explicitly
+    #     using the super-user key generated at runtime by
+    #     SuperUserSeedExtension.
     iatp:
       sts:
         oauth:
           client:
-            enabled: true
+            enabled: false
             id: "did:web:identity-hub.tx.test:BPNL00000003CRHK"
             secret: "operator-sts-secret"
             secret_alias: "operator-sts-secret-alias"
-            x_api_key: "operator-api-key-change-me"
+            x_api_key: "ZGlkOndlYjppZGVudGl0eS1odWIudHgudGVzdDpCUE5MMDAwMDAwMDNDUkhL.placeholder"
     didweb:
       # In-cluster + test ingress uses HTTP, not HTTPS.
       https: false
@@ -217,7 +225,6 @@ identity-hub:
         hostname: "identity-hub-admin.tx.test"
         endpoints:
           - identity
-          - version
           - accounts
         className: "nginx"
         tls:
@@ -251,7 +258,6 @@ issuer-service:
         endpoints:
           - issueradmin
           - identity
-          - version
         className: "nginx"
         tls:
           enabled: false

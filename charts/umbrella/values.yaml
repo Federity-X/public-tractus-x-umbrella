@@ -98,9 +98,18 @@ wallet:
 
   # Endpoint reference for Identity Hub (mode=identityHub).
   # Two topologies: "shared" (multi-tenant) or "perParticipant" (one IH per BPN).
+  #
+  # Two URL families are tracked per topology:
+  #   * public*  — ingress hostnames used for did:web resolution and for
+  #                EDC-to-EDC cross-participant handshakes. Must resolve
+  #                both inside and outside the cluster.
+  #   * internal* — in-cluster Service DNS + named port. Used by the
+  #                 seeding Job and other in-cluster admin traffic. Does
+  #                 NOT depend on ingress working.
   identityHub:
     topology: shared
     shared:
+      # Public (ingress) identity — used for did:web documents.
       host: "identity-hub.tx.test"
       baseUrl: "http://identity-hub.tx.test"
       stsUrl:  "http://identity-hub.tx.test/api/sts"
@@ -109,6 +118,23 @@ wallet:
       didBase: "did:web:identity-hub.tx.test"
       issuerServiceHost: "issuer-service.tx.test"
       issuerServiceBaseUrl: "http://issuer-service.tx.test"
+      # In-cluster service names (must match the Helm release name of the
+      # IH / IS sub-charts). When deployed under umbrella with the aliases
+      # `identity-hub` and `issuer-service`, the upstream charts produce
+      # services named `<release>-identity-hub` and `<release>-issuer-service`.
+      # The {{.Release.Name}} prefix is injected at render time by the
+      # derived ConfigMap template.
+      internalIdentityHubService: "identity-hub"         # -> <release>-identity-hub
+      internalIssuerServiceService: "issuer-service"     # -> <release>-issuer-service
+      # Port map (matches identity-hub / tractusx-issuerservice-memory v0.2.0).
+      ports:
+        ihIdentity: 8081        # /api/identity
+        ihCredentials: 8082     # /api/credentials
+        ihDid: 8083             # /
+        ihSts: 8087             # /api/sts
+        isIssuerAdmin: 8086     # /api/admin
+        isIdentity: 8087        # /api/identity
+        isIssuance: 8082        # /api/issuance
     perParticipant:
       # Map BPN -> ingress host for that participant's Identity Hub.
       # Populated only when topology=perParticipant.
