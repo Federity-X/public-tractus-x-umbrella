@@ -239,3 +239,84 @@ off.
 
 All six changes are improvements that stand on their own merits
 regardless of the remaining D6/D7 work.
+
+---
+
+## Phase 10 — Full DCP API surface exercised (commit `41977c1`)
+
+After the Phase 9 commit hit `SEED SUMMARY: 4 participants provisioned
+successfully` for steps 1–4 of the DCP walkthrough, the remaining
+steps (5/6/8/9) were added to the seed Job under a **best-effort**
+failure model. The Job now exercises every endpoint in the upstream
+walkthrough on every install, while staying green when an optional
+upstream extension is missing.
+
+### Phase-10 outcomes on `kind-umbrella-1609`
+
+| Step | Endpoint                                                                      | Result on kind                        |
+|------|-------------------------------------------------------------------------------|---------------------------------------|
+| §1   | IH `POST /api/identity/v1alpha/participants` (× 4 holders)                    | 409 idempotent (already exists)       |
+| §2   | IH `POST .../{ctx}/state?isActive=true`                                       | 204 OK                                |
+| §3   | IS `POST /api/admin/v1alpha/participants/{issuerCtx}/holders`                 | 201 OK (× 4)                          |
+| §4   | IS issuer ParticipantContext create + activate                                | 409 / 204 OK                          |
+| §5   | IS `POST .../attestations` (`attestationType: database`)                      | 400 WARN — upstream image lacks ext.  |
+| §6   | IS `POST .../credentialdefinitions` (× 3 unique types)                        | 400 WARN — depends on §5              |
+| §7   | implicit `holders` table populated by §5                                      | n/a (no §5 → no rows)                 |
+| §8   | IH `POST .../credentials/request` (× 12 = 4 holders × 3 types)                | 201 OK each                           |
+| §9   | IH `GET .../credentials` polled for `state==ISSUED`                           | WARN — never ISSUED (no §6 def)       |
+
+### D10 — `database` attestation extension is not in the upstream image
+
+`tractusx-issuerservice-memory:0.2.0` does not bundle the
+`issuance-database-attestation` runtime extension that walkthrough §05
+assumes. Upstream's bruno collection works against a custom build that
+includes it. On vanilla kind:
+
+```
+[{"message":"Unknown attestation type: database",
+  "type":"InvalidRequest","path":null,"invalidValue":null}]
+```
+
+**Resolution:** marked §5/§6/§8/§9 as `post_softfail` so the Job emits
+clear WARN lines and continues. When operators install the missing
+extension (or upstream bundles it in a future tag), no template change
+is needed — the Job will start succeeding silently.
+
+### D11 — Holder `holderId` must be the BPN, not the slug
+
+§3 holder-registration body originally sent `holderId: "$PART_ID"`
+(slug like `consumer-bpnl00000003azqp`). Catena-X policy frameworks
+expect `credentialSubject.holderIdentifier` to equal the BPN
+(`BPNL00000003AZQP`). Fixed in `41977c1` by mapping `holder_id` →
+`$BPN` and adjusting the `mappings[].input` in §6 accordingly.
+
+### Definition of Done
+
+| #1609 plan item                                                            | Status                                              |
+|----------------------------------------------------------------------------|-----------------------------------------------------|
+| Single source of truth for participants + DIDs (`wallet.participants`)     | ✅ commit `5ec5cdb`                                 |
+| Seed Job creates ParticipantContexts on IH                                 | ✅ commit `2fdac40`                                 |
+| Seed Job registers holders on IS                                           | ✅ commit `2fdac40`                                 |
+| Seed Job exercises §5/§6/§8/§9                                             | ✅ commit `41977c1` (best-effort)                   |
+| Connector profile wired to IH STS / IH credentials                         | ✅ already in `values-test-data-exchange-identity-hub.yaml` |
+| BDRS re-seeded with IH-hosted DIDs                                         | ✅ same file                                        |
+| Test Case 1 (data exchange) end-to-end pass                                | 🟡 blocked by D10 — VC issuance unavailable until extension is bundled |
+| Deploy guide for the IH profile                                            | ✅ `docs/user/common/guides/data-exchange-identity-hub.md` |
+
+### Recommended follow-ups (separate issues)
+
+1. **issuer-database-attestation packaging** — file an upstream issue
+   with `eclipse-tractusx/tractusx-profiles` to bundle the
+   `issuance-database-attestation` extension in
+   `tractusx-issuerservice-memory:>=0.3.0`. Until then, document a
+   `values-test-data-exchange-identity-hub-with-issuance.yaml` overlay
+   that points to a custom IS image with the extension.
+2. **tractusx-connector ≥ 0.13** — track the connector chart upgrade
+   that exposes first-class `dcp` keys (current 0.11.2 schema still
+   uses `iatp.sts.dim.url`). Re-test the IH profile and drop the
+   `oauth.token_url` work-around when 0.13 is consumed.
+3. **per-participant IH topology** — currently every holder shares the
+   same Identity Hub host (`identity-hub.tx.test`). For production
+   parity we want a `values-test-data-exchange-identity-hub-per-participant.yaml`
+   profile with one IH per participant. Plumbed today by `wallet.participants`
+   but no profile uses it yet.

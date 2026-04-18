@@ -120,9 +120,50 @@ helm upgrade umbrella charts/umbrella \
 
 **Credential request stays in `PENDING` forever.**
 
-Usually the IssuerService has not finished registering the holder DID.
-Check IS logs for stack traces; the seed Job polls 30 × 2 s = 60 s and will
-fail the install if no terminal state is reached.
+This is the **expected current state** on a vanilla cluster — see
+*Known limitations* below. The seed Job emits a clear `WARN` line per
+credential type and continues; provisioning still completes.
+
+## Verification
+
+After `helm install` finishes, the post-install seed Job runs once.
+Confirm the SEED SUMMARY:
+
+```bash
+kubectl -n umbrella logs job/<release>-tx-data-provider-post-install-identityhub-seed --tail=20
+```
+
+You should see:
+
+```
+[ih-seed] ================================================================
+[ih-seed]  SEED SUMMARY: 4 participants provisioned successfully
+[ih-seed]  (issuer=issuer-bpnl00000003crhk activated, all holders created+activated+registered)
+[ih-seed]  credentialDefinitions configured: DataExchangeGovernanceCredential,FrameworkAgreementCredential,MembershipCredential
+[ih-seed]  Credential issuance (§8/§9) is best-effort; check WARN lines
+[ih-seed]  above to assess DCP exchange readiness on this cluster.
+[ih-seed] ================================================================
+```
+
+Pod-level health:
+
+```bash
+kubectl -n umbrella get pods -l app.kubernetes.io/name=identity-hub
+kubectl -n umbrella get pods -l app.kubernetes.io/name=issuer-service
+```
+
+Both should be `1/1 Running`. The seed Job pod should be `0/1 Completed`.
+
+## Known limitations
+
+| ID  | Limitation                                                                                                  | Workaround                                                                                                                              |
+|-----|-------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| L1  | `tractusx-issuerservice-memory:0.2.0` does **not** bundle the `issuance-database-attestation` extension.    | §5/§6/§9 of the seed Job report `WARN` and VC issuance is not available end-to-end. Use a custom IS image with the extension to enable. |
+| L2  | `tractusx-connector:0.11.2` schema still uses `iatp.sts.dim.url` instead of first-class `dcp.*` keys.       | The profile carries the legacy keys; will be cleaned up when the connector chart >= 0.13 is consumed.                                  |
+| L3  | All holders share a single Identity Hub host (`identity-hub.tx.test`).                                      | Use the `-per-participant` sibling profile (planned 26.09) for one IH per BPN.                                                          |
+
+See [`docs/common/concept/1609-local-test-findings.md`](../../../common/concept/1609-local-test-findings.md)
+for the full Phase 9 + Phase 10 retrospective with reproducible commands.
 
 ## Teardown
 
