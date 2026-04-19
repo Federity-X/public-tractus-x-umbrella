@@ -157,13 +157,29 @@ spec:
                 local pod
                 pod=$(kubectl -n "$NAMESPACE" get pod -l "$label" \
                   -o jsonpath='{.items[0].metadata.name}')
-                local key
+                local key=""
+                # Try current logs first.
                 key=$(kubectl -n "$NAMESPACE" logs "$pod" --tail=-1 \
                   | grep -oE "Please take note of the API Key:[[:space:]]+[A-Za-z0-9+/=._-]+" \
                   | head -n1 \
                   | sed -E "s/.*:[[:space:]]+//")
+                # Postgres-backed IH/IS prints the API key ONLY on first
+                # boot; subsequent restarts log "super-user already exists"
+                # and the key never reappears. Fall back to --previous so
+                # re-seeding after an IH/IS pod restart still works.
+                if [ -z "$key" ]; then
+                  key=$(kubectl -n "$NAMESPACE" logs "$pod" --previous --tail=-1 2>/dev/null \
+                    | grep -oE "Please take note of the API Key:[[:space:]]+[A-Za-z0-9+/=._-]+" \
+                    | head -n1 \
+                    | sed -E "s/.*:[[:space:]]+//") || true
+                fi
                 if [ -z "$key" ]; then
                   echo "[ih-seed] FATAL: could not extract super-user API key from pod $pod" >&2
+                  echo "[ih-seed] Hint: for postgres-backed IH/IS, the super-user API key" >&2
+                  echo "[ih-seed]       is printed once on first boot only. If the pod was" >&2
+                  echo "[ih-seed]       restarted and --previous logs have rotated, delete" >&2
+                  echo "[ih-seed]       the 'super-user' ParticipantContext row from the DB" >&2
+                  echo "[ih-seed]       and restart the pod to re-emit the key." >&2
                   kubectl -n "$NAMESPACE" logs "$pod" --tail=40 >&2 || true
                   exit 1
                 fi
