@@ -58,6 +58,9 @@ tractusx-connector:
     # -- Business Partner Number (BPN) of the connector (required in 0.11.0+ via tractusx.edc.participant.bpn)
     # @section -- Decentralized Claims Protocol (DCP, formerly IATP) Settings (Bring Your Own)
     id: BPNL00000003AZQP
+    # -- Participant Context Id - Newly introduced id for a connector instance (required in 0.12.0+, preparation for multi-tenancy)
+    # @section -- Decentralized Claims Protocol (DCP, formerly IATP) Settings (Bring Your Own)
+    contextId: "00000000-0000-0000-0000-00000003azqp"
 
   controlplane:
     # -- (map) Extra environment variables that will be pass onto deployment pods

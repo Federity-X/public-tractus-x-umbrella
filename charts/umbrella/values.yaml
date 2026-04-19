@@ -1211,6 +1211,7 @@ dataconsumerOne:
       nameOverride: dataconsumer-1-edc
       participant:
         id: BPNL00000003AZQP
+        contextId: "00000000-0000-0000-0000-00000003azqp"
       iatp:
         id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AZQP
         trustedIssuers:
@@ -1302,6 +1303,7 @@ tx-data-provider:
       nameOverride: dataprovider-edc
       participant:
         id: BPNL00000003AYRE
+        contextId: "00000000-0000-0000-0000-00000003ayre"
       iatp:
         id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AYRE
         trustedIssuers:
@@ -1468,6 +1470,7 @@ dataconsumerTwo:
       nameOverride: dataconsumer-2-edc
       participant:
         id: BPNL00000003AVTH
+        contextId: "00000000-0000-0000-0000-00000003avth"
       iatp:
         id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AVTH
         trustedIssuers:

@@ -286,7 +286,7 @@ spec:
                 "did": "$did",
                 "roles": ["$role"],
                 "key": {
-                  "keyId": "$pid-key-1",
+                  "keyId": "$did#key-1",
                   "type": "JsonWebKey2020",
                   "privateKeyAlias": "$pid-key-1",
                   "keyGeneratorParams": {
