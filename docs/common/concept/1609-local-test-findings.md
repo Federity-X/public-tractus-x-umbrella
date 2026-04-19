@@ -320,3 +320,136 @@ expect `credentialSubject.holderIdentifier` to equal the BPN
    parity we want a `values-test-data-exchange-identity-hub-per-participant.yaml`
    profile with one IH per participant. Plumbed today by `wallet.participants`
    but no profile uses it yet.
+
+---
+
+## Phase 11 — D10 resolved (postgres IS variant) + 4 incidental fixes
+
+**Re-ran end-to-end on `kind-umbrella-1609`, full umbrella install
+(`helm install umbrella charts/umbrella -f charts/values-test-data-exchange-identity-hub.yaml`).**
+Switched the issuer-service subchart dependency from the in-memory
+variant to the **postgres** variant, which bundles the upstream
+`issuerservice-database-attestations` extension that was missing in D10.
+
+### Seed Job outcome after the switch
+
+| Step | Before (Phase 10)                               | After (Phase 11)              |
+|------|-------------------------------------------------|-------------------------------|
+| §5   | `WARN 400 Unknown attestation type: database`   | **`OK (201)`** ✅             |
+| §6   | `WARN 400 Attestation definitions … not found`  | **`OK (201)` × 3 defs** ✅    |
+| §8   | `OK (201)` × 12                                 | `OK (201)` × 12 (unchanged)   |
+| §9   | WARN never ISSUED                               | WARN never ISSUED (unchanged) |
+
+§5/§6 are now **strict** (`post_idem`, not `post_softfail`). The §9
+"never ISSUED" is a separate DCP lifecycle concern unrelated to D10 —
+noted as a follow-up below.
+
+### ✅ D10 (resolved) — `database` attestation now available
+
+* **Root cause:** confirmed — `tractusx-issuerservice-memory` image
+  only registers the `presentation` attestation factory. The postgres
+  image (`tractusx-issuerservice`) additionally bundles
+  `issuerservice-database-attestations`, which registers the `database`
+  factory required by §5.
+* **Fix:** `charts/identity-and-trust-bundle/Chart.yaml` — swap the
+  dependency `tractusx-issuerservice-memory` → `tractusx-issuerservice`
+  (still v0.2.0, same alias `issuer-service`). The postgres chart bundles
+  its own ephemeral postgres + vault (dev mode) subcharts, so no external
+  infra is required for kind.
+* **Seed-Job side:** `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`
+  — §5 and §6 demoted from `post_softfail` back to `post_idem` (strict).
+
+### ✅ D12 — Cached `tx-data-provider-0.4.6.tgz` missing sub-subcharts
+
+* **Symptom:** `wget: bad address 'umbrella-edc-dataconsumer-1-vault:8200'`
+  during dataconsumer vault-setup Job.
+* **Root cause:** The umbrella-cached `charts/umbrella/charts/tx-data-provider-0.4.6.tgz`
+  was stale (30KB) from before the connector-bundle dependencies landed.
+  It did not contain `dataspace-connector-bundle/charts/{vault,postgresql,tractusx-connector}`.
+* **Fix:** Recursive `helm dep build` on `dataspace-connector-bundle`,
+  `digital-twin-bundle`, `data-persistence-layer-bundle`, then on
+  `tx-data-provider`, then `helm package tx-data-provider -d charts/umbrella/charts/`.
+  Tarball grew 30KB → 575KB. Should be scripted in `hack/helm-dependencies.bash`.
+
+### ✅ D13 — IssuerService pod liveness probe too tight
+
+* **Symptom:** `umbrella-issuer-service` CrashLoopBackOff with `Exit 143`
+  (SIGTERM) ~35s after start. All extensions logged `Started` but the
+  liveness probe killed the JVM before the HTTP listener was bound.
+* **Root cause:** `tractusx-issuerservice/values.yaml` defaults
+  `livenessProbe.initialDelaySeconds=5, periodSeconds=5, failureThreshold=6`
+  = ~35s budget. Postgres IS boot takes ~60s on kind (Flyway migrations
+  across all 7 subsystems — holder, attestationdefinitions,
+  credentialdefinitions, issuanceprocess, did, keypair, stsclient).
+* **Fix:** Override at `issuer-service.issuerservice.{liveness,readiness}Probe`
+  to `initialDelaySeconds=90, periodSeconds=15, timeoutSeconds=10,
+  failureThreshold=6`.
+* **File:** `charts/identity-and-trust-bundle/values.yaml`.
+
+### ✅ D14 — Postgres `Service` label clash with `dataprovider-digital-twin-db`
+
+* **Symptom:** IS pod booted, then immediately logged
+  `FATAL: database "issuer" does not exist` on every JDBC connection.
+  `kubectl get endpoints umbrella-postgresql` showed **two** pod IPs —
+  one from the IS-bundled postgres, one from `dataprovider-digital-twin-db-0`
+  (part of the digital-twin stack, no `issuer` DB).
+* **Root cause:** Both postgres StatefulSets came from the same
+  bitnami/bitnamilegacy postgresql chart and emitted a Service with
+  identical selector labels (`app.kubernetes.io/instance: umbrella`,
+  `app.kubernetes.io/name: postgresql`, `app.kubernetes.io/component: primary`).
+  Kubernetes happily merged the two pod sets behind a single Service name
+  (`umbrella-postgresql`) and round-robined JDBC connections — roughly
+  half landed on the wrong database.
+* **Fix:** `issuer-service.postgresql.nameOverride: issuer-postgresql`
+  to produce a uniquely-named Service (`umbrella-issuer-postgresql`),
+  paired with explicit `postgresql.jdbcUrl` + top-level `issuer-service.jdbcUrl`
+  overrides so the IS chart's auto-generated `issuerservice-datasource-config`
+  ConfigMap points at the renamed Service. Verified via `helm template`
+  that every `edc.datasource.*.url` now resolves to
+  `jdbc:postgresql://umbrella-issuer-postgresql:5432/issuer` before install.
+* **File:** `charts/identity-and-trust-bundle/values.yaml`.
+
+### ✅ D15 — Identity Hub pod liveness probe too tight (same class as D13)
+
+* **Symptom:** `umbrella-identity-hub` CrashLoopBackOff after all extensions
+  logged `Started`; `kubectl describe` → `Liveness probe failed: connection
+  refused on 8080` (x10 over 5m). Same SIGTERM (`Exit 143`) as D13.
+* **Root cause:** `tractusx-identityhub/values.yaml` (and `-memory`) use
+  the same ~35s probe budget as IS; IH Java boot takes ~50s on kind.
+* **Fix:** Override at `identity-hub.identityhub.{liveness,readiness}Probe`
+  to the same values as D13 (90/15/10/6). For the already-running release
+  (helm release stuck in `pending-install`), the fix was applied live via
+  `kubectl patch deploy umbrella-identity-hub --type=json -p='...'`.
+* **File:** `charts/identity-and-trust-bundle/values.yaml`.
+
+### Updated Definition of Done
+
+| #1609 plan item                                                            | Status            |
+|----------------------------------------------------------------------------|-------------------|
+| Seed Job §5 (IS attestation) succeeds                                      | ✅ `OK (201)`     |
+| Seed Job §6 (IS credentialdefinitions × 3) succeeds                        | ✅ `OK (201)` × 3 |
+| IS pod reaches `1/1 Running` on a full umbrella kind install               | ✅                |
+| IH pod reaches `1/1 Running` on a full umbrella kind install               | ✅                |
+| IS-bundled postgres isolated from digital-twin-db                          | ✅ D14            |
+| Test Case 1 (data exchange) end-to-end pass                                | 🟡 §9 ISSUED lifecycle still a follow-up (unrelated to D10) |
+
+### Remaining follow-up (unrelated to #1609 scope)
+
+**§9 credential never reaches `ISSUED` state.** §8 returns `201` for all
+12 `POST .../credentials/request` calls, but subsequent `GET .../credentials`
+polling never shows `state == ISSUED`. This is the DCP credential-issuance
+loop between IH and IS — distinct from D10 (attestation/credentialdef
+registration) and more likely a `did:web` resolution or STS keying issue
+inside the cluster's DNS. Should be filed as a separate umbrella issue
+because #1609's acceptance criteria (§1–§7) are now met.
+
+### Phase 11 files changed
+
+| File                                                     | Reason          |
+|----------------------------------------------------------|-----------------|
+| `charts/identity-and-trust-bundle/Chart.yaml`            | D10             |
+| `charts/identity-and-trust-bundle/values.yaml`           | D10, D13, D14, D15 |
+| `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml` | D10 (§5/§6 strict) |
+| `charts/values-test-data-exchange-identity-hub.yaml`     | D10 (comment)   |
+| `charts/umbrella/charts/tx-data-provider-0.4.6.tgz`      | D12 (repackaged)|
+| `charts/umbrella/charts/identity-and-trust-bundle-1.1.2.tgz` | D10, D13, D14, D15 (repackaged) |

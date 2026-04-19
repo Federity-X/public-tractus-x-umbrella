@@ -178,6 +178,19 @@ identity-hub:
     postgresql: false
     vault: false
   identityhub:
+    # IH boots in ~30-40s on kind. Default probe (initialDelay=5s + period=5s
+    # × failure=6 = ~35s) is too tight; the liveness probe trips during
+    # extension boot and SIGTERMs the JVM mid-startup → CrashLoopBackOff.
+    livenessProbe:
+      initialDelaySeconds: 90
+      periodSeconds: 15
+      timeoutSeconds: 10
+      failureThreshold: 6
+    readinessProbe:
+      initialDelaySeconds: 90
+      periodSeconds: 15
+      timeoutSeconds: 10
+      failureThreshold: 6
     # endpoints.* keys match the real chart schema (ports 8080–8087). The
     # umbrella exposes `identity`, `credentials`, `did`, and `sts` via ingress.
     endpoints:
@@ -231,16 +244,84 @@ identity-hub:
           enabled: false
 
 # -----------------------------------------------------------------------------
-# Issuer Service — companion to Identity Hub (`tractusx-issuerservice-memory`
-# v0.2.0, aliased to `issuer-service`). Issues VCs into each participant's
+# Issuer Service — companion to Identity Hub (`tractusx-issuerservice` v0.2.0,
+# aliased to `issuer-service`). Issues VCs into each participant's
 # ParticipantContext via the DCP Credential Issuance Protocol (CIP).
+#
+# We use the **postgres** variant (NOT `-memory`) because only its image
+# bundles the upstream `issuerservice-database-attestations` module that
+# registers the `database` attestation factory required by §5 of the DCP
+# walkthrough (`{ "attestationType": "database", configuration: { dataSourceName,
+# tableName } }`). The memory image only registers the `presentation`
+# attestation, which cannot bootstrap initial credential issuance.
+# The chart bundles its own ephemeral PostgreSQL + HashiCorp Vault sub-charts
+# (dev mode), so no external infra is required for the umbrella's local
+# (kind) profile. Persistence is disabled — kind clusters are ephemeral.
 # -----------------------------------------------------------------------------
 issuer-service:
   enabled: false
+  # Bundled subcharts: ephemeral postgres + dev-mode vault. Defaults inside
+  # `tractusx-issuerservice` already set both to true; we make it explicit
+  # for clarity and to be robust against any future default change.
   install:
-    postgresql: false
-    vault: false
+    postgresql: true
+    vault: true
+  # PostgreSQL subchart (bitnamilegacy/postgresql, chart 12.12.x). The chart's
+  # auto-generated `issuerservice-datasource-config` ConfigMap wires every
+  # IS subsystem (holder, attestationdefinitions, credentialdefinitions,
+  # issuanceprocess, did, keypair, stsclient) to this single database via
+  # JDBC URL `jdbc:postgresql://{{ .Release.Name }}-postgresql:5432/issuer`.
+  # The Flyway migrations bundled in the postgres image create every required
+  # table on first boot — including `holders` (subsystem `holder`), which the
+  # database attestation in §5 of the seed Job queries via
+  # `dataSourceName: "holder", tableName: "holders"`.
+  #
+  # IMPORTANT: `nameOverride: issuer-postgresql` is required to avoid a label
+  # clash with `dataprovider-digital-twin-db` (also a bitnami postgresql with
+  # `app.kubernetes.io/instance: umbrella, app.kubernetes.io/name: postgresql`).
+  # Without this override the `umbrella-postgresql` Service selects pods from
+  # both StatefulSets and IS connections randomly land on the wrong database
+  # → `FATAL: database "issuer" does not exist`. We pair the override with an
+  # explicit `jdbcUrl` so the IS chart's auto-generated datasource ConfigMap
+  # points at the correctly-named Service (`umbrella-issuer-postgresql`).
+  postgresql:
+    nameOverride: issuer-postgresql
+    # Override JDBC URL to match the renamed postgres Service. Must keep the
+    # `/issuer` database suffix — that's the DB the bitnami chart auto-creates
+    # from `postgresql.auth.database` (default "issuer" upstream).
+    jdbcUrl: "jdbc:postgresql://{{ .Release.Name }}-issuer-postgresql:5432/issuer"
+    primary:
+      persistence:
+        enabled: false
+  # Override JDBC URL to match the renamed postgres Service. Must keep the
+  # `/issuer` database suffix — that's the DB the bitnami chart auto-creates
+  # from `postgresql.auth.database` (default "issuer" upstream).
+  jdbcUrl: "jdbc:postgresql://{{ .Release.Name }}-issuer-postgresql:5432/issuer"
+  # HashiCorp Vault subchart (chart 0.29.1) running in dev mode with a
+  # well-known root token ("root"). Suitable ONLY for local/test profiles.
+  # The IS uses the vault to store generated key material (per-participant
+  # keypair private keys + JDBC creds resolved by the Tractus-X migration
+  # extension `AbstractPostgresqlMigrationExtension`).
+  vault:
+    server:
+      dev:
+        enabled: true
+        devRootToken: "root"
   issuerservice:
+    # Postgres-backed IS needs longer probe windows than the in-memory variant.
+    # Default initialDelay=5s + period=5s × failure=6 = ~35s, which is too tight
+    # when the pod must wait for the bundled postgres + vault subcharts to be
+    # reachable AND run Flyway migrations across all 7 IS subsystems.
+    livenessProbe:
+      initialDelaySeconds: 90
+      periodSeconds: 15
+      timeoutSeconds: 10
+      failureThreshold: 6
+    readinessProbe:
+      initialDelaySeconds: 90
+      periodSeconds: 15
+      timeoutSeconds: 10
+      failureThreshold: 6
     didweb:
       https: false
     ingresses:

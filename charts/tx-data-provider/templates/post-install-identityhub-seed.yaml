@@ -54,13 +54,14 @@
      4.  Emit a final SEED SUMMARY line.
 
    Idempotency: every POST tolerates HTTP 409 (already-exists).
-   Failure semantics: setup + steps 2/3/7 are strict (any ≥400 fails the
-   Job). Steps 5/6 (attestation + credentialdef) and steps 8/9
-   (credentials request + retrieve) are best-effort and only emit
-   warnings — the upstream IssuerService image does not always bundle
-   the `database` attestation extension, so the seed remains green even
-   when DCP issuance is unavailable. Operators can install the missing
-   extension and re-run the Job without re-rolling the whole release.
+   Failure semantics: setup + steps 2/3/5/6/7 are strict (any ≥400 fails the
+   Job). Steps 8/9 (credentials request + retrieve) remain best-effort and
+   only emit warnings — the DCP exchange depends on did:web resolution and
+   STS keying that may not be wired correctly on every cluster. The
+   `database` attestation in §5 is now reliable because we deploy the
+   upstream **postgres** IssuerService image (`tractusx-issuerservice`),
+   which bundles the `issuerservice-database-attestations` extension; the
+   memory image does not.
 */ -}}
 {{- if and (eq (.Values.wallet.mode | default "stub") "identityHub") .Values.wallet.identityHubSeed.enabled }}
 {{- $fullName := include "dataprovider.fullname" . -}}
@@ -365,17 +366,19 @@ spec:
               }
               JSON
               )
-              # NOTE: best-effort. The upstream IssuerService runtime image
-              # does not always bundle the `database` attestation extension
-              # (it is an optional sub-module). When missing, the API
-              # responds 400 "Unknown attestation type: database" and we
-              # log a WARN instead of failing the Job — VC issuance (§8/§9)
-              # is still exercised end-to-end by the data-exchange tests.
-              post_softfail \
+              # Strict: the postgres IssuerService image (tractusx-issuerservice,
+              # NOT -memory) bundles the upstream `issuerservice-database-
+              # attestations` extension that registers the `database` factory.
+              # The chart's auto-generated `issuerservice-datasource-config`
+              # ConfigMap wires the `holder` subsystem to the bundled postgres,
+              # and Flyway migrations create the `holders` table on first boot.
+              # If this POST fails, something is wrong with the image or DB
+              # bootstrap — fail the Job rather than mask it.
+              post_idem \
                 "$IS_ISSUERADMIN/v1alpha/participants/$ISSUER_PID_B64/attestations" \
                 "$IS_KEY" \
                 "$ATTESTATION_BODY" \
-                "(setup §5) IS attestation" || true
+                "(setup §5) IS attestation"
 
               ########################################################
               # SETUP step 6: create one CredentialDefinition per unique
@@ -406,12 +409,12 @@ spec:
               }
               JSON
               )
-                # Best-effort: depends on §5 attestation existing.
-                post_softfail \
+                # Strict: depends on §5 attestation, which is now strict.
+                post_idem \
                   "$IS_ISSUERADMIN/v1alpha/participants/$ISSUER_PID_B64/credentialdefinitions" \
                   "$IS_KEY" \
                   "$CRED_DEF_BODY" \
-                  "(setup §6) IS credentialdefinition $CRED_TYPE → $CRED_ID" || true
+                  "(setup §6) IS credentialdefinition $CRED_TYPE → $CRED_ID"
               done
 
               ########################################################

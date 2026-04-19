@@ -4,7 +4,7 @@
 > **Milestone:** Tractus-X 26.06
 > **Labels:** `tractusx-edc`, `tractusx-identityhub`, `tractus-x-umbrella`, `Prep-R26.06`
 > **Owner (us):** @wahidulazam (contributor); committers: @matbmoser, @CDiezRodriguez, @mgarciaLKS
-> **Status of this plan:** draft v2, 2026-04-18 (re-validated against upstream `tractusx-identityhub/main/docs/usage/dcp-api-walkthrough/`)
+> **Status of this plan:** draft v3, 2026-04-19 — **D10 resolved** (switched to postgres IssuerService variant); full-umbrella kind test green through §6. See `docs/common/concept/1609-local-test-findings.md#phase-11` for the validation log and 4 incidental fixes (D12–D15) uncovered along the way.
 
 ---
 

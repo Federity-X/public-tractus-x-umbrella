@@ -29,7 +29,11 @@
 #
 # Charts used (pinned in charts/identity-and-trust-bundle/Chart.yaml):
 #   - tractusx-identityhub-memory  v0.2.0  (aliased as `identity-hub`)
-#   - tractusx-issuerservice-memory v0.2.0 (aliased as `issuer-service`)
+#   - tractusx-issuerservice       v0.2.0  (aliased as `issuer-service`,
+#                                            postgres+vault variant — required
+#                                            for the bundled `database`
+#                                            attestation extension used in §5
+#                                            of the DCP walkthrough)
 #
 # Usage:
 #   helm dependency build charts/identity-and-trust-bundle

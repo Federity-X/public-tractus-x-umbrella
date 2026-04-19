@@ -51,11 +51,23 @@ dependencies:
     version: v0.2.0
     repository: https://eclipse-tractusx.github.io/charts/dev
     condition: identity-hub.enabled
-  # -- Issuer Service companion to Identity Hub (in-memory variant). Issues
-  #    Verifiable Credentials into each participant's ParticipantContext via
-  #    the DCP Credential Issuance Protocol (CIP). Disabled by default.
+  # -- Issuer Service companion to Identity Hub. Issues Verifiable Credentials
+  #    into each participant's ParticipantContext via the DCP Credential
+  #    Issuance Protocol (CIP). Disabled by default.
+  #
+  #    NOTE: we use the **postgres** variant (NOT `-memory`) because only the
+  #    postgres image bundles the upstream
+  #    `:extensions:issuance:issuerservice-database-attestations` module that
+  #    registers the `database` attestation factory. That factory is required
+  #    by §5 of the upstream DCP walkthrough — without it the IssuerService
+  #    rejects the attestation POST with `400 Unknown attestation type:
+  #    database`. The memory image only registers the `presentation`
+  #    attestation, which cannot be used to bootstrap initial credential
+  #    issuance (it requires an existing VP from the holder).
+  #    The chart bundles its own ephemeral PostgreSQL + HashiCorp Vault
+  #    sub-charts (dev mode), so no external infra is required.
   #    Source: https://github.com/eclipse-tractusx/tractusx-identityhub
-  - name: tractusx-issuerservice-memory
+  - name: tractusx-issuerservice
     alias: issuer-service
     version: v0.2.0
     repository: https://eclipse-tractusx.github.io/charts/dev
