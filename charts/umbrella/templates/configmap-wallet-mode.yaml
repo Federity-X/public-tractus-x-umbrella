@@ -66,6 +66,8 @@ data:
 {{- $cs := include "umbrella.wallet.credentialServiceUrl" (dict "ctx" $root "pid" $pid) }}
 {{- $ctxId := include "umbrella.wallet.participantIdFor" (dict "ctx" $root "pid" $pid) }}
 {{- $b64 := include "umbrella.wallet.base64ParticipantId" (dict "ctx" $root "pid" $pid) }}
+{{- $vaultUrl := tpl ($p.vaultUrl | default "") $root }}
+{{- $vaultToken := $p.vaultToken | default "" }}
       {{ $pid | quote }}: {
         "bpn": {{ $p.bpn | quote }},
         "role": {{ $p.role | quote }},
@@ -73,6 +75,8 @@ data:
         "participantId": {{ $ctxId | quote }},
         "participantIdB64": {{ $b64 | quote }},
         "credentialServiceUrl": {{ $cs | quote }},
+        "vaultUrl": {{ $vaultUrl | quote }},
+        "vaultToken": {{ $vaultToken | quote }},
         "credentials": {{ $p.credentials | toJson }}
       }{{- if lt (add $i 1) (len $keys) }},{{- end }}
 {{- end }}

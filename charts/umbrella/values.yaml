@@ -71,6 +71,13 @@ wallet:
         - MembershipCredential
         - DataExchangeGovernanceCredential
         - FrameworkAgreementCredential
+      # D23b: connector-local Vault coordinates. The IH seed Job writes the
+      # STS client_secret returned by the ParticipantContext-create 201
+      # response here under `secret/data/edc-wallet-secret`, so the
+      # connector's RemoteSecureTokenService can authenticate against IH.
+      # Template-expanded by charts/umbrella/templates/configmap-wallet-mode.yaml.
+      vaultUrl: "http://{{ .Release.Name }}-edc-dataprovider-vault:8200"
+      vaultToken: "root"
     consumer1:
       bpn: "BPNL00000003AZQP"
       role: consumer
@@ -78,6 +85,8 @@ wallet:
         - MembershipCredential
         - DataExchangeGovernanceCredential
         - FrameworkAgreementCredential
+      vaultUrl: "http://{{ .Release.Name }}-edc-dataconsumer-1-vault:8200"
+      vaultToken: "root"
     consumer2:
       bpn: "BPNL00000003AVTH"
       role: consumer
@@ -85,6 +94,8 @@ wallet:
         - MembershipCredential
         - DataExchangeGovernanceCredential
         - FrameworkAgreementCredential
+      vaultUrl: "http://{{ .Release.Name }}-edc-dataconsumer-2-vault:8200"
+      vaultToken: "root"
 
   # Endpoint reference for the SSI DIM Wallet Stub (mode=stub).
   stub:

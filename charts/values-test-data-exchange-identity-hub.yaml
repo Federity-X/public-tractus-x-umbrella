@@ -79,7 +79,8 @@ identity-and-trust-bundle:
 #   Presentation ingress (`identity-hub.tx.test`) exposes:
 #     /api/credentials  (port 8082, DCP VP Protocol)
 #     /                 (port 8083, DID documents: /<BPN>/did.json)
-#     /api/sts          (port 8087, DCP STS token endpoint)
+#     /api/sts/token    (port 8087, DCP STS token endpoint — POST body carries
+#                        grant_type=client_credentials + audience/bearer_access_scope)
 #   Admin ingress (`identity-hub-admin.tx.test`) exposes:
 #     /api/identity     (port 8081, Identity API — X-Api-Key protected)
 #     /api/accounts     (port 8085, STS Accounts API)
@@ -96,18 +97,32 @@ dataconsumerOne:
         trustedIssuers:
           - did:web:identity-hub.tx.test:BPNL00000003CRHK
         sts:
+          # D22: set sts.dim.url to empty string so the connector loads only the
+          # OAuth2 STS client (RemoteSecureTokenService) which posts form-encoded
+          #   grant_type=client_credentials&client_id=<did>&audience=<target-did>&client_secret=<secret>
+          # The tractusx-connector chart emits TX_EDC_IAM_STS_DIM_URL only when
+          # .Values.iatp.sts.dim.url is truthy (deployment-controlplane.yaml:242),
+          # so empty string suppresses it and prevents tx-dcp-sts-dim from loading.
+          # (Helm does not honour `dim: null` for overriding subchart map defaults.)
           dim:
-            url: http://identity-hub.tx.test/api/sts
+            url: ""
           oauth:
-            # See CAVEAT at top of file — IH STS is not OAuth2; this URL is
-            # retained only for tractusx-connector 0.11.2 schema compatibility.
-            token_url: http://identity-hub.tx.test/api/sts
+            token_url: http://identity-hub.tx.test/api/sts/token
+            client:
+              # D23a: IH's StsAccount stores clientId = the participant's DID
+              # (see IdentityHubParticipantContextServiceImpl — clientId is
+              # taken verbatim from manifest.getDid(), NOT the BPN). The
+              # connector sends this value as the OAuth2 client_id form param
+              # (RemoteSecureTokenService.java:62-78), so it must match the
+              # full DID or IH returns 401 invalid_client.
+              id: did:web:identity-hub.tx.test:BPNL00000003AZQP
+              secret_alias: edc-wallet-secret
       controlplane:
         env:
           TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
         bdrs:
           server:
-            url: http://bdrs-server:8081
+            url: http://bdrs-server:8082/api/directory
       dataplane:
         env:
           TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
@@ -124,15 +139,18 @@ tx-data-provider:
           - did:web:identity-hub.tx.test:BPNL00000003CRHK
         sts:
           dim:
-            url: http://identity-hub.tx.test/api/sts
+            url: ""
           oauth:
-            token_url: http://identity-hub.tx.test/api/sts
+            token_url: http://identity-hub.tx.test/api/sts/token
+            client:
+              id: did:web:identity-hub.tx.test:BPNL00000003AYRE
+              secret_alias: edc-wallet-secret
       controlplane:
         env:
           TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
         bdrs:
           server:
-            url: http://bdrs-server:8081
+            url: http://bdrs-server:8082/api/directory
       dataplane:
         env:
           TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
@@ -149,15 +167,18 @@ dataconsumerTwo:
           - did:web:identity-hub.tx.test:BPNL00000003CRHK
         sts:
           dim:
-            url: http://identity-hub.tx.test/api/sts
+            url: ""
           oauth:
-            token_url: http://identity-hub.tx.test/api/sts
+            token_url: http://identity-hub.tx.test/api/sts/token
+            client:
+              id: did:web:identity-hub.tx.test:BPNL00000003AVTH
+              secret_alias: edc-wallet-secret
       controlplane:
         env:
           TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
         bdrs:
           server:
-            url: http://bdrs-server:8081
+            url: http://bdrs-server:8082/api/directory
       dataplane:
         env:
           TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
