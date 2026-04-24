@@ -288,16 +288,17 @@ If you want to iterate on the JAR outside Docker (faster rebuilds while debuggin
 
 > The repo ships its own Helm charts at `charts/ssi-dim-wallet-stub-memory/` and `charts/ssi-dim-wallet-stub/`. The umbrella pulls `ssi-dim-wallet-stub` from the `tractusx-dev` helm repo via `identity-and-trust-bundle`.
 
-Override in umbrella:
+Override in umbrella (image keys live **under `wallet.*`** in the stub's chart — default repo is `tractusx/ssi-dim-wallet-stub-memory`):
 
 ```yaml
 # values-dev.yaml
 identity-and-trust-bundle:
   ssi-dim-wallet-stub:
-    image:
-      repository: local/ssi-dim-wallet-stub
-      tag: dev
-      pullPolicy: Never
+    wallet:
+      image:
+        repository: local/ssi-dim-wallet-stub
+        tag: dev
+        pullPolicy: Never
 ```
 
 > **Tip**: To run the stub as a bare JVM for debugging (no umbrella), use `./gradlew :runtimes:ssi-dim-wallet-stub-memory:bootRun` and hit Swagger at `http://localhost:8080/ui/swagger-ui/index.html`.
