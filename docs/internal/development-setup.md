@@ -316,17 +316,18 @@ docker build -f ./.conf/Dockerfile.prebuilt -t local/portal-frontend:dev .
 
 The portal-backend repo produces **separate Docker images for each microservice**. The main ones you'll touch:
 
-| Service | Image name | Source path |
+| Service | Image name | Dockerfile |
 |---|---|---|
-| Registration Service       | `portal-registration-service`        | `src/registration/Registration.Service/` |
-| Administration Service     | `portal-administration-service`      | `src/administration/Administration.Service/` |
-| Marketplace App Service    | `portal-marketplace-app-service`     | `src/marketplace/Apps.Service/` |
-| Services Service           | `portal-services-service`            | `src/marketplace/Services.Service/` |
-| Notification Service       | `portal-notification-service`        | `src/notification/Notification.Service/` |
-| Processes Worker           | `portal-processes-worker`            | `src/processes/Processes.Worker/` |
-| Portal Migrations          | `portal-portal-migrations`           | `src/database/` |
-| Provisioning Migrations    | `portal-provisioning-migrations`     | `docker/` |
-| Maintenance Service        | `portal-maintenance-service`         | `src/maintenance/Maintenance.Service/` |
+| Registration Service       | `portal-registration-service`        | `docker/Dockerfile-registration-service` |
+| Administration Service     | `portal-administration-service`      | `docker/Dockerfile-administration-service` |
+| Marketplace App Service    | `portal-marketplace-app-service`     | `docker/Dockerfile-marketplace-app-service` |
+| Services Service           | `portal-services-service`            | `docker/Dockerfile-services-service` |
+| Notification Service       | `portal-notification-service`        | `docker/Dockerfile-notification-service` |
+| Processes Worker           | `portal-processes-worker`            | `docker/Dockerfile-processes-worker` |
+| Portal Migrations          | `portal-portal-migrations`           | `docker/Dockerfile-portal-migrations` |
+| Provisioning Migrations    | `portal-provisioning-migrations`     | `docker/Dockerfile-provisioning-migrations` |
+| Maintenance Service        | `portal-maintenance-service`         | `docker/Dockerfile-maintenance-service` |
+| IAM Seeding                | `portal-iam-seeding`                 | `docker/Dockerfile-iam-seeding` |
 
 ```bash
 cd ~/workspace/portal-backend
@@ -334,7 +335,7 @@ dotnet build src                                              # compile everythi
 
 # Build only the service you changed, e.g. Registration:
 docker build -t local/portal-registration-service:dev \
-  -f src/registration/Registration.Service/Dockerfile .
+  -f docker/Dockerfile-registration-service .
 ```
 
 **Override in umbrella** — the Portal sub-chart (from `eclipse-tractusx/portal`) groups image settings under `portal.*` keys. Example overlay:
@@ -394,22 +395,26 @@ docker build -t local/bpdm-cleaning-service-dummy:dev -f docker/cleaning-service
 
 > The repo also ships a Helm chart at `charts/bpdm/` which is what the umbrella pulls from `tractusx-dev`.
 
-**Override in umbrella** — BPDM sub-charts appear as **top-level keys** in the umbrella values (not nested under another bundle):
+**Override in umbrella** — BPDM sub-services are **nested under `bpdm:`** in the umbrella `values.yaml` (they are sub-charts of the BPDM parent chart, not siblings). So the override keys are:
 
 ```yaml
 # values-dev.yaml
-bpdm-pool:
-  image:
-    registry: ""
-    repository: local/bpdm-pool
-    tag: dev
-    pullPolicy: Never
+bpdm:
+  bpdm-gate:
+    image:
+      registry: ""
+      repository: local/bpdm-gate
+      tag: dev
+      pullPolicy: Never
 
-bpdm-gate:
-  image: { registry: "", repository: local/bpdm-gate,         tag: dev, pullPolicy: Never }
+  bpdm-pool:
+    image: { registry: "", repository: local/bpdm-pool,         tag: dev, pullPolicy: Never }
 
-bpdm-orchestrator:
-  image: { registry: "", repository: local/bpdm-orchestrator, tag: dev, pullPolicy: Never }
+  bpdm-orchestrator:
+    image: { registry: "", repository: local/bpdm-orchestrator, tag: dev, pullPolicy: Never }
+
+  bpdm-cleaning-service-dummy:
+    image: { registry: "", repository: local/bpdm-cleaning-service-dummy, tag: dev, pullPolicy: Never }
 ```
 
 ### 6.6 Digital Twin Registry
@@ -427,17 +432,19 @@ mvn clean install -DskipTests
 docker build -t local/digital-twin-registry:dev .
 ```
 
-Override:
+Override — DTR is deployed by `tx-data-provider` **through the `digital-twin-bundle` sub-chart**, so the key path is:
 
 ```yaml
+# values-dev.yaml
 tx-data-provider:
-  digital-twin-registry:
-    registry:
-      image:
-        registry: ""
-        repository: local/digital-twin-registry
-        tag: dev
-        pullPolicy: Never
+  digital-twin-bundle:
+    digital-twin-registry:
+      registry:
+        image:
+          registry: ""
+          repository: local/digital-twin-registry
+          tag: dev
+          pullPolicy: Never
 ```
 
 ### 6.7 simple-data-backend (in this repo)
@@ -450,15 +457,16 @@ cd ~/workspace/public-tractus-x-umbrella/simple-data-backend
 docker build -t local/simple-data-backend:dev .
 ```
 
-Override in `charts/simple-data-backend/values.yaml` or via `values-dev.yaml`:
+Override in `charts/simple-data-backend/values.yaml` or via `values-dev.yaml`. `simple-data-backend` is deployed by `tx-data-provider` **through the `data-persistence-layer-bundle` sub-chart**:
 
 ```yaml
 tx-data-provider:
-  simple-data-backend:
-    image:
-      repository: local/simple-data-backend
-      tag: dev
-      pullPolicy: Never
+  data-persistence-layer-bundle:
+    simple-data-backend:
+      image:
+        repository: local/simple-data-backend
+        tag: dev
+        pullPolicy: Never
 ```
 
 ### 6.8 Keycloak (CentralIDP / SharedIDP)
@@ -474,46 +482,51 @@ Keycloak itself is usually left as-is (bitnami image). If you're customising **r
 1. Create `charts/umbrella/values-dev.yaml`:
 
    ```yaml
-   # --- Data provider EDC ---
+   # --- Data provider EDC + DTR + simple-data-backend (all under tx-data-provider) ---
    tx-data-provider:
-     tractusx-connector:
-       controlplane:
+     dataspace-connector-bundle:
+       tractusx-connector:
+         controlplane:
+           image:
+             repository: local/edc-controlplane
+             tag: dev
+             pullPolicy: Never
+         dataplane:
+           image:
+             repository: local/edc-dataplane
+             tag: dev
+             pullPolicy: Never
+     digital-twin-bundle:
+       digital-twin-registry:
+         registry:
+           image:
+             repository: local/digital-twin-registry
+             tag: dev
+             pullPolicy: Never
+     data-persistence-layer-bundle:
+       simple-data-backend:
          image:
-           repository: local/edc-controlplane
+           repository: local/simple-data-backend
            tag: dev
            pullPolicy: Never
-       dataplane:
-         image:
-           repository: local/edc-dataplane
-           tag: dev
-           pullPolicy: Never
-     digital-twin-registry:
-       registry:
-         image:
-           repository: local/digital-twin-registry
-           tag: dev
-           pullPolicy: Never
-     simple-data-backend:
-       image:
-         repository: local/simple-data-backend
-         tag: dev
-         pullPolicy: Never
 
-   # --- Data consumer 1 ---
+   # --- Data consumer 1 (also wraps tractusx-connector via dataspace-connector-bundle) ---
    dataconsumerOne:
-     tractusx-connector:
-       controlplane:
-         image: { repository: local/edc-controlplane, tag: dev, pullPolicy: Never }
-       dataplane:
-         image: { repository: local/edc-dataplane,    tag: dev, pullPolicy: Never }
+     dataspace-connector-bundle:
+       tractusx-connector:
+         controlplane:
+           image: { repository: local/edc-controlplane, tag: dev, pullPolicy: Never }
+         dataplane:
+           image: { repository: local/edc-dataplane,    tag: dev, pullPolicy: Never }
 
    # --- Data consumer 2 ---
    dataconsumerTwo:
-     tractusx-connector:
-       controlplane:
-         image: { repository: local/edc-controlplane, tag: dev, pullPolicy: Never }
-       dataplane:
-         image: { repository: local/edc-dataplane,    tag: dev, pullPolicy: Never }
+     dataspace-connector-bundle:
+       tractusx-connector:
+         controlplane:
+           image: { repository: local/edc-controlplane, tag: dev, pullPolicy: Never }
+         dataplane:
+           image: { repository: local/edc-dataplane,    tag: dev, pullPolicy: Never }
 
    # --- Wallet stub ---
    identity-and-trust-bundle:
@@ -523,6 +536,8 @@ Keycloak itself is usually left as-is (bitnami image). If you're customising **r
          tag: dev
          pullPolicy: Never
    ```
+
+> **Why this nesting?** The `tx-data-provider` sub-chart (see `charts/tx-data-provider/Chart.yaml`) is itself an umbrella composed of three inner sub-charts: `dataspace-connector-bundle` (wraps `tractusx-connector`), `digital-twin-bundle` (wraps `digital-twin-registry`), and `data-persistence-layer-bundle` (wraps `simple-data-backend`). Because the `tx-data-provider` chart is aliased **three times** in the umbrella (`dataconsumerOne`, `tx-data-provider`, `dataconsumerTwo`), the same nested path applies under each alias.
 
 2. Add it to `.gitignore`:
 
@@ -586,15 +601,16 @@ Add this to the container's env in `values-dev.yaml`:
 
 ```yaml
 tx-data-provider:
-  tractusx-connector:
-    controlplane:
-      env:
-        JAVA_TOOL_OPTIONS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
-      service:
-        extraPorts:
-          - name: jdwp
-            port: 5005
-            targetPort: 5005
+  dataspace-connector-bundle:
+    tractusx-connector:
+      controlplane:
+        env:
+          JAVA_TOOL_OPTIONS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+        service:
+          extraPorts:
+            - name: jdwp
+              port: 5005
+              targetPort: 5005
 ```
 
 Then:
@@ -665,10 +681,11 @@ Extension settings go into EDC env vars (prefix `EDC_`, `TX_`) and into the conn
 
 ```yaml
 tx-data-provider:
-  tractusx-connector:
-    controlplane:
-      env:
-        EDC_MY_EXTENSION_FEATURE_FLAG: "true"
+  dataspace-connector-bundle:
+    tractusx-connector:
+      controlplane:
+        env:
+          EDC_MY_EXTENSION_FEATURE_FLAG: "true"
 ```
 
 ---
@@ -737,16 +754,17 @@ Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real
 
    ```yaml
    tx-data-provider:
-     tractusx-connector:
-       iatp:              # if still on old key
-         sts:
-           dim:
-             url: http://identity-hub.umbrella.svc:7171/api/v1/dim
-           oauth:
-             token_url: http://identity-hub.umbrella.svc:8080/oauth/token
-       controlplane:
-         env:
-           TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.umbrella.svc:7171/api
+     dataspace-connector-bundle:
+       tractusx-connector:
+         iatp:              # if still on old key
+           sts:
+             dim:
+               url: http://identity-hub.umbrella.svc:7171/api/v1/dim
+             oauth:
+               token_url: http://identity-hub.umbrella.svc:8080/oauth/token
+         controlplane:
+           env:
+             TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.umbrella.svc:7171/api
    ```
 
    (New keys — after PR #2684 rename — use `dcp:` and `sts.div` respectively.)
