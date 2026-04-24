@@ -345,31 +345,49 @@ docker build -t local/portal-registration-service:dev \
   -f docker/Dockerfile-registration-service .
 ```
 
-**Override in umbrella** — the Portal sub-chart (from `eclipse-tractusx/portal`) groups image settings under `portal.*` keys. Example overlay:
+**Override in umbrella** — the Portal sub-chart (from `eclipse-tractusx/portal`) splits into `frontend.*` and `backend.*` branches, and **each service uses a bespoke tag key** (not `image.tag`). Representative keys (check `charts/portal/values.yaml` in the portal repo for the exact list at the version you pin):
+
+| Service             | Image key                                              | Tag key                                                                   |
+| ------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| portal-frontend     | `portal.frontend.portal.image.name`                    | `portal.frontend.portal.image.portaltag`                                  |
+| registration FE     | `portal.frontend.registration.image.name`              | `portal.frontend.registration.image.registrationtag`                      |
+| portal-assets       | `portal.frontend.assets.image.name`                    | `portal.frontend.assets.image.assetstag`                                  |
+| registration-service| `portal.backend.registration.image.name`               | `portal.backend.registration.image.registrationservicetag`                |
+| administration-svc  | `portal.backend.administration.image.name`             | `portal.backend.administration.image.administrationservicetag`            |
+| marketplace-app-svc | `portal.backend.appmarketplace.image.name`             | `portal.backend.appmarketplace.image.appmarketplaceservicetag`            |
+| services-service    | `portal.backend.services.image.name`                   | `portal.backend.services.image.servicesservicetag`                        |
+| notification-service| `portal.backend.notification.image.name`               | `portal.backend.notification.image.notificationservicetag`                |
+| processes-worker    | `portal.backend.processesworker.image.name`            | `portal.backend.processesworker.image.processesworkertag`                 |
+| portal-migrations   | `portal.backend.portalmigrations.image.name`           | `portal.backend.portalmigrations.image.portalmigrationstag`               |
+| portal-maintenance  | `portal.backend.portalmaintenance.image.name`          | `portal.backend.portalmaintenance.image.portalmaintenancetag`             |
+| provisioning-migrations | `portal.backend.provisioningmigrations.image.name` | `portal.backend.provisioningmigrations.image.provisioningmigrationstag`   |
+
+Example overlay:
 
 ```yaml
 # values-dev.yaml
 portal:
   frontend:
-    image:
-      name: local/portal-frontend
-      tag: dev
-      pullPolicy: Never
+    portal:
+      image:
+        name: local/portal-frontend
+        portaltag: dev
+        pullPolicy: Never
   backend:
     registration:
       image:
         name: local/portal-registration-service
-        tag: dev
+        registrationservicetag: dev
         pullPolicy: Never
     administration:
       image:
         name: local/portal-administration-service
-        tag: dev
+        administrationservicetag: dev
         pullPolicy: Never
     # … one entry per service you rebuilt
 ```
 
-> The exact value paths depend on the `portal` chart version. Inspect `charts/portal/values.yaml` in the `eclipse-tractusx/portal` repo for the authoritative schema, then mirror the structure in your overlay.
+> **Always** verify the exact key names against `charts/portal/values.yaml` at the portal chart version the umbrella pulls (see `charts/umbrella/Chart.yaml` for the pinned version). Upstream occasionally renames tag fields.
 
 ### 6.5 BPDM
 
@@ -388,10 +406,10 @@ cd ~/workspace/bpdm
 
 # Build everything once (compiles all modules, produces the executable jars under
 # bpdm-<service>/target/):
-./mvnw clean package -DskipTests
+mvn clean package -DskipTests
 
 # Or build a single service:
-./mvnw -pl bpdm-pool -am clean package -DskipTests
+mvn -pl bpdm-pool -am clean package -DskipTests
 
 # Dockerfiles live under docker/<service>/ and are invoked from repo root:
 docker build -t local/bpdm-pool:dev         -f docker/pool/Dockerfile         .
@@ -460,7 +478,7 @@ This one lives inside the umbrella repo itself:
 
 ```bash
 cd ~/workspace/public-tractus-x-umbrella/simple-data-backend
-./mvnw clean package
+mvn clean package
 docker build -t local/simple-data-backend:dev .
 ```
 
