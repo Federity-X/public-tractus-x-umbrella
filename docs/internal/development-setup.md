@@ -15,7 +15,7 @@
 5. [The Core Inner-Loop Pattern](#5-the-core-inner-loop-pattern)
 6. [Per-Component Build Recipes](#6-per-component-build-recipes)
    - [6.1 tractusx-edc (EDC Connector)](#61-tractusx-edc-edc-connector)
-   - [6.2 Identity Hub (eclipse-edc/IdentityHub)](#62-identity-hub-eclipse-edcidentityhub)
+   - [6.2 Identity Hub (eclipse-tractusx/tractusx-identityhub)](#62-identity-hub-eclipse-tractusxtractusx-identityhub)
    - [6.3 SSI DIM Wallet Stub](#63-ssi-dim-wallet-stub)
    - [6.4 Portal (Frontend + Backend)](#64-portal-frontend--backend)
    - [6.5 BPDM](#65-bpdm)
@@ -57,12 +57,12 @@ Steps 3 and 4 are the same for every component. The only things that vary per co
 | Helm | 3.14+ | Install the umbrella chart |
 | Minikube (recommended) **or** kind | latest | Local Kubernetes |
 | Git | any | Clone repos |
-| JDK | **17** (tractusx-edc) / **21** (IdentityHub, ssi-dim-wallet-stub, BPDM, DTR) | Build Java/Kotlin |
+| JDK | **17** (tractusx-edc) / **21** (tractusx-identityhub, ssi-dim-wallet-stub, BPDM, DTR) | Build Java/Kotlin |
 | Node.js | **20 LTS** | Build Portal frontend |
 | Yarn | 1.22+ (classic) | Portal frontend package manager |
 | .NET SDK | **9.0** | Build Portal backend |
 | Maven | 3.9+ | Build `simple-data-backend`, BPDM, DTR |
-| Gradle wrapper | shipped in repos | tractusx-edc, IdentityHub, ssi-dim-wallet-stub |
+| Gradle wrapper | shipped in repos | tractusx-edc, tractusx-identityhub, ssi-dim-wallet-stub |
 | Python | 3.11+ | Seeding scripts |
 | `yq` / `jq` | any | YAML/JSON editing |
 
@@ -82,7 +82,7 @@ git clone git@github.com:Federity-X/public-tractus-x-umbrella.git
 
 # Upstream component repos (only clone what you plan to modify)
 git clone https://github.com/eclipse-tractusx/tractusx-edc.git
-git clone https://github.com/eclipse-edc/IdentityHub.git
+git clone https://github.com/eclipse-tractusx/tractusx-identityhub.git
 git clone https://github.com/eclipse-tractusx/ssi-dim-wallet-stub.git
 git clone https://github.com/eclipse-tractusx/portal-frontend.git
 git clone https://github.com/eclipse-tractusx/portal-backend.git
@@ -97,7 +97,7 @@ Result:
 ~/workspace/
 ├── public-tractus-x-umbrella/           ← deploys
 ├── tractusx-edc/                        ← controlplane + dataplane + extensions (Java/Gradle)
-├── IdentityHub/                         ← upstream EDC Identity Hub (Java/Gradle) — NO helm chart
+├── tractusx-identityhub/                ← Tractus-X distribution of EDC Identity Hub + IssuerService (Java/Gradle, ships Helm charts)
 ├── ssi-dim-wallet-stub/                 ← the stub wallet used by umbrella (Java/Gradle)
 ├── portal-frontend/                     ← React app (TS/Vite/Yarn)
 ├── portal-backend/                      ← .NET 9.0 API (multiple services)
@@ -231,39 +231,61 @@ docker tag edc-controlplane-postgresql-hashicorp-vault:latest local/edc-controlp
 docker tag edc-dataplane-hashicorp-vault:latest            local/edc-dataplane:dev
 ```
 
-### 6.2 Identity Hub (eclipse-edc/IdentityHub)
+### 6.2 Identity Hub (eclipse-tractusx/tractusx-identityhub)
 
-> Upstream `eclipse-edc/IdentityHub` builds a **shaded (fat) JAR** using `shadowJar`, then a manual `docker build` produces the image. There is **no `:dockerize` gradle task** and **no Helm chart in this repo** — you bring your own deployment.
+> In the Tractus-X ecosystem the Identity Hub / Issuer Service are consumed from **`eclipse-tractusx/tractusx-identityhub`** — a production-shaped distribution of the upstream `eclipse-edc/IdentityHub`, packaged with Helm charts, Postgres + HashiCorp Vault integration, and in-memory variants for dev/test. It uses the **same `:dockerize` Gradle task pattern** as tractusx-edc (`com.bmuschko.docker-remote-api`), so the build flow mirrors §6.1.
 
-The repo ships **four launchers** under `launcher/`:
+The repo ships **four runtimes** under `runtimes/` (each has its own `Dockerfile`):
 
-| Launcher | Purpose |
+| Runtime | Purpose |
 |---|---|
-| `identityhub`            | Hub-only runtime (Presentation/Storage APIs, Identity API, STS embedded) |
-| `identityhub-oauth2`     | Same as above but Identity API secured with OAuth2 |
-| `issuer-service`         | Standalone Credential Service / issuer runtime |
-| `issuer-service-oauth2`  | Issuer service with OAuth2 Admin API |
+| `identityhub`         | Production IdentityHub runtime (Postgres + Vault) |
+| `identityhub-memory`  | In-memory IdentityHub runtime (demo/testing only) |
+| `issuerservice`       | Production IssuerService runtime (Postgres + Vault) |
+| `issuerservice-memory`| In-memory IssuerService runtime (demo/testing only) |
 
-Build the `identityhub` launcher (most common for dev):
+And **four matching Helm charts** under `charts/`:
 
-```bash
-cd ~/workspace/IdentityHub
+| Chart | Notes |
+|---|---|
+| `tractusx-identityhub`         | Production chart — Postgres + Vault |
+| `tractusx-identityhub-memory`  | Memory chart — ephemeral, dev/test only |
+| `tractusx-issuerservice`       | Production IssuerService chart |
+| `tractusx-issuerservice-memory`| Memory IssuerService chart |
 
-# 1. Produce the fat JAR (lands at launcher/identityhub/build/libs/identity-hub.jar)
-./gradlew :launcher:identityhub:shadowJar
-
-# 2. Build the image from the launcher folder (contains a Dockerfile)
-docker build -t local/identity-hub:dev ./launcher/identityhub
-```
-
-To build a different launcher, substitute the path:
+Build images via the `:dockerize` task (builds shaded JAR + docker image in one step):
 
 ```bash
-./gradlew :launcher:issuer-service:shadowJar
-docker build -t local/identity-hub-issuer:dev ./launcher/issuer-service
+cd ~/workspace/tractusx-identityhub
+
+# Build every runtime that has a Dockerfile (identityhub, identityhub-memory,
+# issuerservice, issuerservice-memory)
+./gradlew dockerize
 ```
 
-**No umbrella sub-chart exists for Identity Hub today.** See [§11](#11-replacing-the-wallet-stub-with-real-identity-hub) for how to deploy it alongside umbrella using raw manifests or a hand-rolled chart.
+Or build a single runtime:
+
+```bash
+./gradlew :runtimes:identityhub-memory:dockerize
+```
+
+Images produced (same convention as tractusx-edc — no `tractusx/` prefix, tagged with the gradle `version` and `latest`):
+
+- `identityhub:<version>` / `identityhub:latest`
+- `identityhub-memory:<version>` / `identityhub-memory:latest`
+- `issuerservice:<version>` / `issuerservice:latest`
+- `issuerservice-memory:<version>` / `issuerservice-memory:latest`
+
+where `<version>` comes from `gradle.properties` (e.g. `0.2.0`).
+
+Retag under a stable local name for the umbrella overlay:
+
+```bash
+docker tag identityhub-memory:latest   local/identity-hub:dev
+docker tag issuerservice-memory:latest local/identity-hub-issuer:dev
+```
+
+**The umbrella's `identity-and-trust-bundle` currently depends only on `ssi-dim-wallet-stub`** — it does *not* pull in `tractusx-identityhub` yet. See [§11](#11-replacing-the-wallet-stub-with-real-identity-hub) for how to swap the stub for a real IdentityHub deployment using the charts above.
 
 ### 6.3 SSI DIM Wallet Stub
 
@@ -720,9 +742,7 @@ tx-data-provider:
 
 Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real Identity Hub:
 
-> **Caveat**: `eclipse-edc/IdentityHub` **does not ship a Helm chart**. You have two options:
-> - (Simpler) Deploy the image with a minimal hand-written `Deployment` + `Service` manifest.
-> - (Proper) Author your own Helm chart that wraps the image and templates its configuration.
+> **Recommended path**: use the official **`eclipse-tractusx/tractusx-identityhub`** Helm charts (`tractusx-identityhub-memory` for quick dev, `tractusx-identityhub` for prod-shaped with Postgres + Vault). These are the Tractus-X-curated distribution of the upstream EDC IdentityHub — do **not** roll your own manifests unless you have a specific reason. The raw-manifest example below is kept only as a minimal fallback.
 
 1. **Disable the stub** in `values-dev.yaml`:
 
@@ -732,7 +752,26 @@ Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real
        enabled: false
    ```
 
-2. **Deploy Identity Hub separately** into the same namespace. Build the image (see §6.2) and apply a minimal manifest. Example (`identity-hub.yaml`) — **port numbers below are placeholders**; the actual values depend on the launcher's `*.properties` file under `launcher/identityhub/src/main/resources/` and any env overrides you set:
+2. **Deploy Identity Hub via the Tractus-X chart** (preferred). Add the repo and install the memory variant alongside the umbrella release:
+
+   ```bash
+   # Build the image locally (see §6.2) so it's available inside minikube
+   eval $(minikube docker-env)
+   (cd ~/workspace/tractusx-identityhub && ./gradlew :runtimes:identityhub-memory:dockerize)
+
+   # Install from the chart in the cloned repo (or from the published Helm repo
+   # once the Tractus-X release publishes images to docker.io)
+   helm install identity-hub \
+     ~/workspace/tractusx-identityhub/charts/tractusx-identityhub-memory \
+     -n umbrella \
+     --set image.repository=identityhub-memory \
+     --set image.tag=latest \
+     --set image.pullPolicy=Never
+   ```
+
+   For the production variant (`tractusx-identityhub`), also provide Postgres + Vault values per that chart's `values.yaml`.
+
+   **Fallback — raw manifest** (only if you cannot use the chart). Port numbers below are **placeholders**; check the runtime's `resources/*.properties` under `runtimes/identityhub-memory/` and any env overrides:
 
    ```yaml
    apiVersion: apps/v1
@@ -781,7 +820,7 @@ Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real
    kubectl apply -f identity-hub.yaml
    ```
 
-   For a production-shaped deployment, fork or wrap this into your own chart under `charts/identity-hub/` and add it to `Chart.yaml` as a dependency.
+   For a production-shaped deployment, prefer the upstream `tractusx-identityhub` chart (with Postgres + Vault) over hand-rolled manifests.
 
 3. **Rewire EDC** — in `values-dev.yaml`, replace all `ssi-dim-wallet-stub.tx.test` URLs with your Identity Hub service hostname. Key settings (see `ECOSYSTEM-GUIDE.md` for the full list):
 
