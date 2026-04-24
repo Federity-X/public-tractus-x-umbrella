@@ -1189,4 +1189,4 @@ Only the **Data Provider (OEM A)** has actual EDC infrastructure deployed with t
 
 ---
 
-*Generated from codebase analysis of Eclipse Tractus-X Umbrella v3.15.3*
+*Generated from codebase analysis of Eclipse Tractus-X Umbrella v3.15.6 (aligned with Tractus-X Release 25.12)*

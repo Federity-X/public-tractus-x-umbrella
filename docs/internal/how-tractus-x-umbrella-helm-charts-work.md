@@ -39,7 +39,7 @@ Every dependency has a `condition` flag that defaults to `false` in `values.yaml
 | `tx-data-provider` | `dataconsumerTwo` | `dataconsumerTwo.enabled` | `file://../tx-data-provider` | 0.4.6 | Local |
 | `pgadmin4` | — | `pgadmin4.enabled` | helm.runix.net | 1.25.x | Remote |
 | `bdrs-server-memory` | — | `bdrs-server-memory.enabled` | tractusx-dev | 0.5.7 | Remote |
-| `identity-and-trust-bundle` | — | `identity-and-trust-bundle.enabled` | `file://../identity-and-trust-bundle` | 1.1.2 | Local |
+| `identity-and-trust-bundle` | — | `identity-and-trust-bundle.enabled` | `file://../identity-and-trust-bundle` | 1.1.3 | Local |
 | `opentelemetry-collector` | — | `opentelemetry-collector.enabled` | OTEL | 0.126.0 | Remote |
 | `jaeger` | — | `jaeger.enabled` | jaegertracing | 3.0.7 | Remote |
 | `prometheus` | — | `prometheus.enabled` | prometheus-community | 27.1.0 | Remote |
@@ -513,4 +513,4 @@ curl http://identity-hub.tx.test/health
 
 ---
 
-*Document for BE-165 — Based on tractus-x-umbrella v3.15.3 analysis*
+*Document for BE-165 — Based on tractus-x-umbrella v3.15.6 analysis (aligned with Tractus-X Release 25.12)*
