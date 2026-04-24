@@ -57,10 +57,12 @@ Steps 3 and 4 are the same for every component. The only things that vary per co
 | Helm | 3.14+ | Install the umbrella chart |
 | Minikube (recommended) **or** kind | latest | Local Kubernetes |
 | Git | any | Clone repos |
-| JDK | **17** (EDC) / **21** (Identity Hub & Portal backend) | Build Java |
+| JDK | **17** (tractusx-edc) / **21** (IdentityHub, ssi-dim-wallet-stub, BPDM, DTR) | Build Java/Kotlin |
 | Node.js | **20 LTS** | Build Portal frontend |
-| Maven | 3.9+ | Build `simple-data-backend` and Portal backend |
-| Go | 1.22+ | Some EDC build tools |
+| Yarn | 1.22+ (classic) | Portal frontend package manager |
+| .NET SDK | **9.0** | Build Portal backend |
+| Maven | 3.9+ | Build `simple-data-backend`, BPDM, DTR |
+| Gradle wrapper | shipped in repos | tractusx-edc, IdentityHub, ssi-dim-wallet-stub |
 | Python | 3.11+ | Seeding scripts |
 | `yq` / `jq` | any | YAML/JSON editing |
 
@@ -84,6 +86,7 @@ git clone https://github.com/eclipse-edc/IdentityHub.git
 git clone https://github.com/eclipse-tractusx/ssi-dim-wallet-stub.git
 git clone https://github.com/eclipse-tractusx/portal-frontend.git
 git clone https://github.com/eclipse-tractusx/portal-backend.git
+git clone https://github.com/eclipse-tractusx/portal.git             # Portal Helm chart lives here
 git clone https://github.com/eclipse-tractusx/bpdm.git
 git clone https://github.com/eclipse-tractusx/sldt-digital-twin-registry.git
 ```
@@ -93,14 +96,17 @@ Result:
 ```
 ~/workspace/
 ├── public-tractus-x-umbrella/           ← deploys
-├── tractusx-edc/                        ← controlplane + dataplane + extensions
-├── IdentityHub/                         ← upstream EDC Identity Hub
-├── ssi-dim-wallet-stub/                 ← the stub wallet used by umbrella
-├── portal-frontend/                     ← React app
-├── portal-backend/                      ← .NET API
-├── bpdm/                                ← Kotlin/Spring
-└── sldt-digital-twin-registry/          ← Spring Boot
+├── tractusx-edc/                        ← controlplane + dataplane + extensions (Java/Gradle)
+├── IdentityHub/                         ← upstream EDC Identity Hub (Java/Gradle) — NO helm chart
+├── ssi-dim-wallet-stub/                 ← the stub wallet used by umbrella (Java/Gradle)
+├── portal-frontend/                     ← React app (TS/Vite/Yarn)
+├── portal-backend/                      ← .NET 9.0 API (multiple services)
+├── portal/                              ← Helm chart repo for Portal (frontend+backend)
+├── bpdm/                                ← Kotlin/Spring (Maven) — pool/gate/orchestrator
+└── sldt-digital-twin-registry/          ← Spring Boot (Maven)
 ```
+
+> **Important**: The Portal **Helm chart is not in `portal-frontend` or `portal-backend`** — it lives in a separate `eclipse-tractusx/portal` repo (chart at `charts/portal/`). The umbrella consumes it as a sub-chart.
 
 ---
 
@@ -223,21 +229,57 @@ docker tag tractusx/edc-dataplane-hashicorp-vault:0.12.0-SNAPSHOT \
 
 ### 6.2 Identity Hub (eclipse-edc/IdentityHub)
 
+> Upstream `eclipse-edc/IdentityHub` builds a **shaded (fat) JAR** using `shadowJar`, then a manual `docker build` produces the image. There is **no `:dockerize` gradle task** and **no Helm chart in this repo** — you bring your own deployment.
+
+The repo ships **four launchers** under `launcher/`:
+
+| Launcher | Purpose |
+|---|---|
+| `identityhub`            | Hub-only runtime (Presentation/Storage APIs, Identity API, STS embedded) |
+| `identityhub-oauth2`     | Same as above but Identity API secured with OAuth2 |
+| `issuer-service`         | Standalone Credential Service / issuer runtime |
+| `issuer-service-oauth2`  | Issuer service with OAuth2 Admin API |
+
+Build the `identityhub` launcher (most common for dev):
+
 ```bash
 cd ~/workspace/IdentityHub
-./gradlew :launcher:identityhub:dockerize
-docker tag identityhub:latest local/identity-hub:dev
+
+# 1. Produce the fat JAR (lands at launcher/identityhub/build/libs/identity-hub.jar)
+./gradlew :launcher:identityhub:shadowJar
+
+# 2. Build the image from the launcher folder (contains a Dockerfile)
+docker build -t local/identity-hub:dev ./launcher/identityhub
 ```
 
-Note: there is no umbrella sub-chart for Identity Hub today — see [§11](#11-replacing-the-wallet-stub-with-real-identity-hub).
+To build a different launcher, substitute the path:
+
+```bash
+./gradlew :launcher:issuer-service:shadowJar
+docker build -t local/identity-hub-issuer:dev ./launcher/issuer-service
+```
+
+**No umbrella sub-chart exists for Identity Hub today.** See [§11](#11-replacing-the-wallet-stub-with-real-identity-hub) for how to deploy it alongside umbrella using raw manifests or a hand-rolled chart.
 
 ### 6.3 SSI DIM Wallet Stub
 
+> Uses **Gradle** (not Maven). Has **two runtime variants**: `ssi-dim-wallet-stub-memory` (in-memory) and `ssi-dim-wallet-stub` (with Postgres). The umbrella uses the **in-memory** variant via the `identity-and-trust-bundle` sub-chart.
+
 ```bash
 cd ~/workspace/ssi-dim-wallet-stub
-./mvnw clean package -DskipTests
+
+# Build the bootable JAR for the in-memory runtime (what umbrella uses)
+./gradlew :runtimes:ssi-dim-wallet-stub-memory:clean :runtimes:ssi-dim-wallet-stub-memory:bootJar
+
+# Or, for the persistent (Postgres) variant:
+./gradlew :runtimes:ssi-dim-wallet-stub:clean :runtimes:ssi-dim-wallet-stub:bootJar
+
+# The repo has a single Dockerfile at the root that is parameterised by build args.
+# By default it builds the memory runtime:
 docker build -t local/ssi-dim-wallet-stub:dev .
 ```
+
+> The repo ships its own Helm charts at `charts/ssi-dim-wallet-stub-memory/` and `charts/ssi-dim-wallet-stub/`. The umbrella pulls `ssi-dim-wallet-stub` from the `tractusx-dev` helm repo via `identity-and-trust-bundle`.
 
 Override in umbrella:
 
@@ -251,28 +293,54 @@ identity-and-trust-bundle:
       pullPolicy: Never
 ```
 
+> **Tip**: To run the stub as a bare JVM for debugging (no umbrella), use `./gradlew :runtimes:ssi-dim-wallet-stub-memory:bootRun` and hit Swagger at `http://localhost:8080/ui/swagger-ui/index.html`.
+
 ### 6.4 Portal (Frontend + Backend)
 
-**Frontend** (React):
+The Portal is three repos: `portal-frontend`, `portal-backend`, and `portal` (the Helm chart). The umbrella consumes the `portal` chart as a sub-chart.
+
+**Frontend** (React + Vite + Yarn):
 
 ```bash
 cd ~/workspace/portal-frontend
 yarn install
 yarn build
+
+# Repo ships a Dockerfile under .conf/ — use it against the already-built bundle:
 docker build -f ./.conf/Dockerfile.prebuilt -t local/portal-frontend:dev .
 ```
 
-**Backend** (.NET 8):
+> For local dev without Docker, `yarn start` runs the app at `http://localhost:3001/`. But to test inside umbrella you need a container image.
+
+**Backend** (.NET 9.0 — **ships MANY service images**, not one):
+
+The portal-backend repo produces **separate Docker images for each microservice**. The main ones you'll touch:
+
+| Service | Image name | Source path |
+|---|---|---|
+| Registration Service       | `portal-registration-service`        | `src/registration/Registration.Service/` |
+| Administration Service     | `portal-administration-service`      | `src/administration/Administration.Service/` |
+| Marketplace App Service    | `portal-marketplace-app-service`     | `src/marketplace/Apps.Service/` |
+| Services Service           | `portal-services-service`            | `src/marketplace/Services.Service/` |
+| Notification Service       | `portal-notification-service`        | `src/notification/Notification.Service/` |
+| Processes Worker           | `portal-processes-worker`            | `src/processes/Processes.Worker/` |
+| Portal Migrations          | `portal-portal-migrations`           | `src/database/` |
+| Provisioning Migrations    | `portal-provisioning-migrations`     | `docker/` |
+| Maintenance Service        | `portal-maintenance-service`         | `src/maintenance/Maintenance.Service/` |
 
 ```bash
-cd ~/workspace/portal-backend/src
-dotnet publish portal/Portal.Service/Portal.Service.csproj -c Release -o ./out
-docker build -t local/portal-backend-service:dev -f portal/Portal.Service/Dockerfile .
+cd ~/workspace/portal-backend
+dotnet build src                                              # compile everything once
+
+# Build only the service you changed, e.g. Registration:
+docker build -t local/portal-registration-service:dev \
+  -f src/registration/Registration.Service/Dockerfile .
 ```
 
-The Portal bundle is deployed by the **umbrella-infrastructure** chart via the umbrella's `values-adopter-portal.yaml`. Override with:
+**Override in umbrella** — the Portal sub-chart (from `eclipse-tractusx/portal`) groups image settings under `portal.*` keys. Example overlay:
 
 ```yaml
+# values-dev.yaml
 portal:
   frontend:
     image:
@@ -280,37 +348,82 @@ portal:
       tag: dev
       pullPolicy: Never
   backend:
-    service:
+    registration:
       image:
-        name: local/portal-backend-service
+        name: local/portal-registration-service
         tag: dev
         pullPolicy: Never
+    administration:
+      image:
+        name: local/portal-administration-service
+        tag: dev
+        pullPolicy: Never
+    # … one entry per service you rebuilt
 ```
+
+> The exact value paths depend on the `portal` chart version. Inspect `charts/portal/values.yaml` in the `eclipse-tractusx/portal` repo for the authoritative schema, then mirror the structure in your overlay.
 
 ### 6.5 BPDM
 
-BPDM is multiple Spring Boot services (pool, gate, orchestrator, cleaning-service):
+> BPDM is a **Maven multi-module** project (not Gradle) written in Kotlin/Spring Boot. Dockerfiles are centralised under `docker/<service>/`, not inside each module.
+
+Modules:
+- `bpdm-pool` — golden record of BPNs (authoritative store)
+- `bpdm-gate` — participant-facing ingress
+- `bpdm-orchestrator` — coordinates the golden-record process
+- `bpdm-cleaning-service-dummy` — reference curation/enrichment service
+
+Build:
 
 ```bash
 cd ~/workspace/bpdm
-./gradlew :bpdm-pool:bootJar
-./gradlew :bpdm-gate:bootJar
-./gradlew :bpdm-orchestrator:bootJar
 
-# Each service has its own Dockerfile under bpdm-<service>/
-docker build -t local/bpdm-pool:dev        -f bpdm-pool/Dockerfile        bpdm-pool
-docker build -t local/bpdm-gate:dev        -f bpdm-gate/Dockerfile        bpdm-gate
-docker build -t local/bpdm-orchestrator:dev -f bpdm-orchestrator/Dockerfile bpdm-orchestrator
+# Build everything once (compiles all modules, produces the executable jars under
+# bpdm-<service>/target/):
+./mvnw clean package -DskipTests
+
+# Or build a single service:
+./mvnw -pl bpdm-pool -am clean package -DskipTests
+
+# Dockerfiles live under docker/<service>/ and are invoked from repo root:
+docker build -t local/bpdm-pool:dev         -f docker/pool/Dockerfile         .
+docker build -t local/bpdm-gate:dev         -f docker/gate/Dockerfile         .
+docker build -t local/bpdm-orchestrator:dev -f docker/orchestrator/Dockerfile .
+docker build -t local/bpdm-cleaning-service-dummy:dev -f docker/cleaning-service-dummy/Dockerfile .
 ```
 
-Override the images under `bpdm.*` in `values-adopter-data-exchange.yaml` or `values-dev.yaml`.
+> The repo also ships a Helm chart at `charts/bpdm/` which is what the umbrella pulls from `tractusx-dev`.
+
+**Override in umbrella** — BPDM sub-charts appear as **top-level keys** in the umbrella values (not nested under another bundle):
+
+```yaml
+# values-dev.yaml
+bpdm-pool:
+  image:
+    registry: ""
+    repository: local/bpdm-pool
+    tag: dev
+    pullPolicy: Never
+
+bpdm-gate:
+  image: { registry: "", repository: local/bpdm-gate,         tag: dev, pullPolicy: Never }
+
+bpdm-orchestrator:
+  image: { registry: "", repository: local/bpdm-orchestrator, tag: dev, pullPolicy: Never }
+```
 
 ### 6.6 Digital Twin Registry
 
+> Spring Boot + Maven. Both the Maven build and the Dockerfile are driven from the **repo root** (the `backend/` folder is just the primary module).
+
 ```bash
 cd ~/workspace/sldt-digital-twin-registry
-./mvnw clean package -DskipTests
-cd backend
+
+# Compile all modules; runnable jar lands at
+# backend/target/digital-twin-registry-backend-<version>.jar
+mvn clean install -DskipTests
+
+# Build the image from repo root (Dockerfile is at repo root):
 docker build -t local/digital-twin-registry:dev .
 ```
 
@@ -564,6 +677,10 @@ tx-data-provider:
 
 Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real Identity Hub:
 
+> **Caveat**: `eclipse-edc/IdentityHub` **does not ship a Helm chart**. You have two options:
+> - (Simpler) Deploy the image with a minimal hand-written `Deployment` + `Service` manifest.
+> - (Proper) Author your own Helm chart that wraps the image and templates its configuration.
+
 1. **Disable the stub** in `values-dev.yaml`:
 
    ```yaml
@@ -572,15 +689,49 @@ Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real
        enabled: false
    ```
 
-2. **Deploy Identity Hub separately** into the same namespace. The IdentityHub repo contains a Helm chart at `charts/identity-hub/` — point it at your `local/identity-hub:dev` image:
+2. **Deploy Identity Hub separately** into the same namespace. Build the image (see §6.2) and apply a minimal manifest. Example (`identity-hub.yaml`):
+
+   ```yaml
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: identity-hub
+     namespace: umbrella
+   spec:
+     replicas: 1
+     selector: { matchLabels: { app: identity-hub } }
+     template:
+       metadata: { labels: { app: identity-hub } }
+       spec:
+         containers:
+         - name: identity-hub
+           image: local/identity-hub:dev
+           imagePullPolicy: Never
+           ports:
+           - { name: presentation, containerPort: 10001 }
+           - { name: identity,     containerPort: 8181 }
+           - { name: sts,          containerPort: 9292 }
+           # Configure via env / mounted properties file. See the upstream
+           # launcher/identityhub/ directory for the expected configuration keys.
+   ---
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: identity-hub
+     namespace: umbrella
+   spec:
+     selector: { app: identity-hub }
+     ports:
+     - { name: presentation, port: 7171, targetPort: 10001 }
+     - { name: identity,     port: 8181, targetPort: 8181 }
+     - { name: sts,          port: 9292, targetPort: 9292 }
+   ```
 
    ```bash
-   helm install identity-hub ~/workspace/IdentityHub/charts/identity-hub \
-     -n umbrella \
-     --set image.repository=local/identity-hub \
-     --set image.tag=dev \
-     --set image.pullPolicy=Never
+   kubectl apply -f identity-hub.yaml
    ```
+
+   For a production-shaped deployment, fork or wrap this into your own chart under `charts/identity-hub/` and add it to `Chart.yaml` as a dependency.
 
 3. **Rewire EDC** — in `values-dev.yaml`, replace all `ssi-dim-wallet-stub.tx.test` URLs with your Identity Hub service hostname. Key settings (see `ECOSYSTEM-GUIDE.md` for the full list):
 
