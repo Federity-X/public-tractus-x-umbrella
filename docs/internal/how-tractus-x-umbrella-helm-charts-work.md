@@ -278,7 +278,7 @@ Today, identity is handled by three components:
 
 **EDC connectors** authenticate to each other via the SSI Wallet Stub using the IATP/DCP protocol (Verifiable Presentations). They do NOT use Keycloak for connector-to-connector auth.
 
-**Identity Hub** would likely **replace the SSI DIM Wallet Stub** as the production wallet implementation, providing:
+**Identity Hub** would **replace the SSI DIM Wallet Stub** as the production wallet implementation. In the Tractus-X ecosystem it is shipped by **`eclipse-tractusx/tractusx-identityhub`** as four Helm charts — `tractusx-identityhub`, `tractusx-identityhub-memory`, `tractusx-issuerservice`, `tractusx-issuerservice-memory` — providing:
 - Real DID management
 - Verifiable Credential issuance and storage
 - IATP Secure Token Service
@@ -288,7 +288,7 @@ Today, identity is handled by three components:
 
 ## 5. Checklist: Adding a New Component to the Umbrella Chart
 
-Use this checklist when integrating Identity Hub (or any new component).
+Use this checklist when integrating Identity Hub (or any new component). Concrete values shown here use **`eclipse-tractusx/tractusx-identityhub`** chart names.
 
 ### Step 1: Add Dependency in Chart.yaml
 
@@ -296,16 +296,16 @@ Use this checklist when integrating Identity Hub (or any new component).
 # charts/umbrella/Chart.yaml
 dependencies:
   # ... existing deps ...
-  - name: identity-hub                          # Chart name from registry
-    condition: identity-hub.enabled             # Condition flag
-    repository: https://eclipse-tractusx.github.io/charts/dev  # Or file:// for local
-    version: x.y.z                              # Pin the version
-    # alias: identity-hub                       # Optional: use if chart name differs from desired values key
+  - name: tractusx-identityhub-memory          # or tractusx-identityhub for prod (Postgres + Vault)
+    condition: tractusx-identityhub-memory.enabled
+    repository: file://../../../tractusx-identityhub/charts/tractusx-identityhub-memory
+    version: 0.2.0                              # matches gradle.properties in that repo
+    alias: identity-hub                         # map to a shorter values key
 ```
 
-**Decision**: Remote (`https://...`) or Local (`file://../identity-hub`)?
-- Use **local** during active development (place chart under `charts/identity-hub/`)
-- Use **remote** when consuming a published chart
+**Decision**: Remote (published chart) or Local (`file://`)?
+- Use **local** during active development (clone `eclipse-tractusx/tractusx-identityhub` alongside the umbrella repo and reference `charts/tractusx-identityhub-memory`)
+- Use **remote** once Tractus-X publishes the chart to a Helm repository (not published at time of writing — see that repo's README for status)
 
 ### Step 2: Add Values Section in values.yaml
 

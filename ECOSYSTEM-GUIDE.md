@@ -419,7 +419,7 @@ The SSI DIM Wallet Stub is a **centralized mock** — one service fakes wallet b
 
 #### What is Identity Hub?
 
-Identity Hub is a **real DCP-compliant wallet** from the upstream Eclipse EDC project (`eclipse-edc/IdentityHub`, not eclipse-tractusx). It is a per-participant (or multi-tenant) service that implements the full Decentralized Claims Protocol. Tractus-X uses it but it's maintained in the upstream EDC repository.
+Identity Hub is a **real DCP-compliant wallet**. In the Tractus-X ecosystem it is consumed from **`eclipse-tractusx/tractusx-identityhub`** — a production-shaped distribution (Postgres + HashiCorp Vault, plus in-memory variants for dev/test) of the upstream `eclipse-edc/IdentityHub`. The Tractus-X repo ships four runtimes (`identityhub`, `identityhub-memory`, `issuerservice`, `issuerservice-memory`) and four matching Helm charts (`tractusx-identityhub`, `tractusx-identityhub-memory`, `tractusx-issuerservice`, `tractusx-issuerservice-memory`). It is a per-participant (or multi-tenant) service that implements the full Decentralized Claims Protocol.
 
 ##### Three Internal Services
 
@@ -738,7 +738,7 @@ Additional DCP-related extensions in tractusx-edc:
 | `edc-extensions/token-interceptor/` | Intercepts and enriches tokens in the DCP flow |
 | `edc-extensions/tokenrefresh-handler/` | Handles token refresh logic for long-running transfers |
 
-The Identity Hub's DCP protocol implementation (`eclipse-edc/IdentityHub`, `protocols/dcp/`) contains:
+The Identity Hub's DCP protocol implementation (upstream `eclipse-edc/IdentityHub`, `protocols/dcp/` — reused as-is by the Tractus-X distribution `eclipse-tractusx/tractusx-identityhub`) contains:
 
 | Module | Purpose |
 |--------|---------|
@@ -1174,7 +1174,7 @@ Only the **Data Provider (OEM A)** has actual EDC infrastructure deployed with t
 | **Hub API** | Identity Hub's external API — implements the DCP Verifiable Presentation Protocol (Presentation API + Storage API) and Credential Issuance Protocol (Credential Offer API) |
 | **IATP** | Identity and Trust Protocol (now DCP) |
 | **Identity API** | Identity Hub's internal management API — CRUD on DIDs, keys, credentials, and ParticipantContexts |
-| **Identity Hub** | Eclipse EDC upstream wallet (`eclipse-edc/IdentityHub`) — manages DIDs, stores VCs, provides STS/CS/DIDS services; replaces the SSI DIM Wallet Stub. Used by Tractus-X but maintained in the upstream EDC project |
+| **Identity Hub** | DCP-compliant wallet — manages DIDs, stores VCs, provides STS/CS/DIDS services; replaces the SSI DIM Wallet Stub. In Tractus-X it is consumed as **`eclipse-tractusx/tractusx-identityhub`** (production distribution with Postgres + Vault and in-memory variants), which is built on top of the upstream `eclipse-edc/IdentityHub` codebase |
 | **IDP** | Identity Provider (Keycloak) |
 | **SAMM** | Semantic Aspect Meta Model |
 | **SI Token** | Self-Issued Token — a JWT issued by Identity Hub's STS, containing a VP Access Token as proof of identity |
