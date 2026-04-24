@@ -211,20 +211,24 @@ cd ~/workspace/tractusx-edc
 ./gradlew :edc-dataplane:edc-dataplane-base:dockerize
 ```
 
-Gradle produces images like:
+Gradle produces images tagged as **`<project-name>:<version>`** and **`<project-name>:latest`**, so the outputs are e.g.:
 
 ```
-tractusx/edc-controlplane-postgresql-hashicorp-vault:0.12.0-SNAPSHOT
-tractusx/edc-dataplane-hashicorp-vault:0.12.0-SNAPSHOT
+edc-controlplane-postgresql-hashicorp-vault:<version>
+edc-controlplane-postgresql-hashicorp-vault:latest
+edc-dataplane-hashicorp-vault:<version>
+edc-dataplane-hashicorp-vault:latest
+edc-runtime-memory:<version>
+edc-runtime-memory:latest
 ```
 
-Retag:
+> `<version>` comes from the gradle `version` property in `gradle.properties` (e.g. `0.12.0`, `0.13.0-SNAPSHOT`, `0.15.0-SNAPSHOT` depending on the branch you are on). The safest reference is the `:latest` tag produced by the same build.
+
+Retag under a stable local name that your umbrella overlay references:
 
 ```bash
-docker tag tractusx/edc-controlplane-postgresql-hashicorp-vault:0.12.0-SNAPSHOT \
-           local/edc-controlplane:dev
-docker tag tractusx/edc-dataplane-hashicorp-vault:0.12.0-SNAPSHOT \
-           local/edc-dataplane:dev
+docker tag edc-controlplane-postgresql-hashicorp-vault:latest local/edc-controlplane:dev
+docker tag edc-dataplane-hashicorp-vault:latest            local/edc-dataplane:dev
 ```
 
 ### 6.2 Identity Hub (eclipse-edc/IdentityHub)
@@ -265,18 +269,21 @@ docker build -t local/identity-hub-issuer:dev ./launcher/issuer-service
 
 > Uses **Gradle** (not Maven). Has **two runtime variants**: `ssi-dim-wallet-stub-memory` (in-memory) and `ssi-dim-wallet-stub` (with Postgres). The umbrella uses the **in-memory** variant via the `identity-and-trust-bundle` sub-chart.
 
+The `Dockerfile` at the repo root is multi-stage and runs the Gradle build itself (`FROM gradle:8.9-jdk21-alpine AS build`), so the simplest build is:
+
 ```bash
 cd ~/workspace/ssi-dim-wallet-stub
-
-# Build the bootable JAR for the in-memory runtime (what umbrella uses)
-./gradlew :runtimes:ssi-dim-wallet-stub-memory:clean :runtimes:ssi-dim-wallet-stub-memory:bootJar
-
-# Or, for the persistent (Postgres) variant:
-./gradlew :runtimes:ssi-dim-wallet-stub:clean :runtimes:ssi-dim-wallet-stub:bootJar
-
-# The repo has a single Dockerfile at the root that is parameterised by build args.
-# By default it builds the memory runtime:
 docker build -t local/ssi-dim-wallet-stub:dev .
+```
+
+If you want to iterate on the JAR outside Docker (faster rebuilds while debugging), build locally first:
+
+```bash
+# In-memory runtime (what umbrella uses)
+./gradlew :runtimes:ssi-dim-wallet-stub-memory:bootJar
+
+# Persistent (Postgres) variant
+./gradlew :runtimes:ssi-dim-wallet-stub:bootJar
 ```
 
 > The repo ships its own Helm charts at `charts/ssi-dim-wallet-stub-memory/` and `charts/ssi-dim-wallet-stub/`. The umbrella pulls `ssi-dim-wallet-stub` from the `tractusx-dev` helm repo via `identity-and-trust-bundle`.
@@ -572,8 +579,7 @@ eval $(minikube docker-env)
 # 2. Rebuild the image
 cd ~/workspace/tractusx-edc
 ./gradlew :edc-controlplane:edc-runtime-memory:dockerize
-docker tag tractusx/edc-controlplane-postgresql-hashicorp-vault:0.12.0-SNAPSHOT \
-           local/edc-controlplane:dev
+docker tag edc-runtime-memory:latest local/edc-controlplane:dev
 
 # 3. Restart just that deployment — no helm upgrade needed
 kubectl rollout restart -n umbrella deployment/umbrella-dataprovider-edc-controlplane
@@ -658,7 +664,8 @@ my-edc-extension/
 `Dockerfile`:
 
 ```dockerfile
-FROM tractusx/edc-controlplane-postgresql-hashicorp-vault:0.12.0
+# Use the same version you'll run in the cluster (check your local build output)
+FROM edc-controlplane-postgresql-hashicorp-vault:latest
 COPY build/libs/my-edc-extension.jar /app/extensions/
 ```
 
@@ -706,7 +713,7 @@ Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real
        enabled: false
    ```
 
-2. **Deploy Identity Hub separately** into the same namespace. Build the image (see §6.2) and apply a minimal manifest. Example (`identity-hub.yaml`):
+2. **Deploy Identity Hub separately** into the same namespace. Build the image (see §6.2) and apply a minimal manifest. Example (`identity-hub.yaml`) — **port numbers below are placeholders**; the actual values depend on the launcher's `*.properties` file under `launcher/identityhub/src/main/resources/` and any env overrides you set:
 
    ```yaml
    apiVersion: apps/v1
@@ -724,12 +731,18 @@ Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real
          - name: identity-hub
            image: local/identity-hub:dev
            imagePullPolicy: Never
+           env:
+           # Port numbers are illustrative — set them to whatever the
+           # launcher config expects.
+           - { name: WEB_HTTP_PORT,              value: "8181" }
+           - { name: WEB_HTTP_PRESENTATION_PORT, value: "10001" }
+           - { name: WEB_HTTP_IDENTITY_PORT,     value: "8182" }
+           - { name: WEB_HTTP_STS_PORT,          value: "9292" }
            ports:
+           - { name: default,      containerPort: 8181 }
            - { name: presentation, containerPort: 10001 }
-           - { name: identity,     containerPort: 8181 }
+           - { name: identity,     containerPort: 8182 }
            - { name: sts,          containerPort: 9292 }
-           # Configure via env / mounted properties file. See the upstream
-           # launcher/identityhub/ directory for the expected configuration keys.
    ---
    apiVersion: v1
    kind: Service
@@ -739,9 +752,10 @@ Current default: the umbrella deploys `ssi-dim-wallet-stub`. To test with a real
    spec:
      selector: { app: identity-hub }
      ports:
-     - { name: presentation, port: 7171, targetPort: 10001 }
-     - { name: identity,     port: 8181, targetPort: 8181 }
-     - { name: sts,          port: 9292, targetPort: 9292 }
+     - { name: default,      port: 8181,  targetPort: 8181 }
+     - { name: presentation, port: 7171,  targetPort: 10001 }
+     - { name: identity,     port: 8182,  targetPort: 8182 }
+     - { name: sts,          port: 9292,  targetPort: 9292 }
    ```
 
    ```bash
@@ -839,8 +853,7 @@ eval $(minikube docker-env)
 # --- Build a component (EDC shown) ----------------------------------------
 cd ~/workspace/tractusx-edc
 ./gradlew dockerize
-docker tag tractusx/edc-controlplane-postgresql-hashicorp-vault:0.12.0-SNAPSHOT \
-           local/edc-controlplane:dev
+docker tag edc-controlplane-postgresql-hashicorp-vault:latest local/edc-controlplane:dev
 
 # --- First deploy ---------------------------------------------------------
 cd ~/workspace/public-tractus-x-umbrella/charts/umbrella
@@ -852,8 +865,7 @@ helm upgrade --install umbrella . \
 
 # --- Iterate --------------------------------------------------------------
 ./gradlew :edc-controlplane:edc-runtime-memory:dockerize
-docker tag tractusx/edc-controlplane-postgresql-hashicorp-vault:0.12.0-SNAPSHOT \
-           local/edc-controlplane:dev
+docker tag edc-runtime-memory:latest local/edc-controlplane:dev
 kubectl rollout restart -n umbrella deploy/umbrella-dataprovider-edc-controlplane
 kubectl logs -f         -n umbrella deploy/umbrella-dataprovider-edc-controlplane
 ```
