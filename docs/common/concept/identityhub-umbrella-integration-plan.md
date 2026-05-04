@@ -129,8 +129,8 @@ Wallet-agnostic. Confirmed against the v0.16.0 DCP modules.
 Already at v0.17.0. The Identity Admin API
 (`/v1alpha/participants/{ctx}/dids/{did}/endpoints`) is stable. OAuth2
 auth on the Issuer-Admin API was added in v0.16.0
-([eclipse-edc/IdentityHub#880](https://github.com/eclipse-edc/IdentityHub/issues/880));
-Tractus-X simply consumes it.
+([eclipse-edc/IdentityHub PR #880](https://github.com/eclipse-edc/IdentityHub/pull/880),
+merged 3 Dec 2025); Tractus-X simply consumes it.
 
 ### 4.3 `eclipse-tractusx/tractusx-identityhub` — four tasks
 
@@ -184,10 +184,13 @@ chart-time-seeding alternative that avoids needing it.
 
 ### 4.5 `eclipse-tractusx/bpn-did-resolution-service` — done
 
-- Release **0.6.0** (commit `fee8860`, ~2 weeks ago) with EDC 0.16.0,
-  Postgres 18, Helm 3.20-compatible chart restructure
-  ([PR #400](https://github.com/eclipse-tractusx/bpn-did-resolution-service/pull/400)).
-- Replaces the `0.7.0-SNAPSHOT` workaround used in PR #396.
+- Release **0.6.0** with EDC 0.16.0 and Postgres 18 — already published.
+  Subsequent maintenance kept the chart aligned with the connector's
+  cloud-pirates Helm-chart version
+  ([PR #400](https://github.com/eclipse-tractusx/bpn-did-resolution-service/pull/400),
+  merged 25 Mar 2026).
+- Replaces the `0.7.0-SNAPSHOT` workaround used in
+  [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396).
 - **Both** `bdrs-server` and `bdrs-server-memory` charts expose only:
   `endpoints.management` on `:8081 /api/management`,
   `endpoints.directory` on `:8082 /api/directory`,
@@ -249,8 +252,9 @@ tractusx-identityhub:
   enabled: '{{ eq .Values.identityProvider.type "identityhub" }}'
 ```
 
-This contrasts with PR #396, which hard-disables the stub. A feature
-flag keeps every existing wallet-stub adopter on a known-good code path.
+This contrasts with [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396),
+which hard-disables the stub. A feature flag keeps every existing
+wallet-stub adopter on a known-good code path.
 
 ### 5.2 Connector schema migration (`iatp` → `dcp`)
 
@@ -275,11 +279,12 @@ Mechanical changes:
 | `participant.id: BPNL...` (BPN string) | `participant.id: did:web:...` (DID), `participant.bpnl: BPNL...`, `participant.contextId: <uuid>` |
 
 A new `dcp.didService.selfRegistration.enabled: false` toggle exists in
-the connector chart since PR #2742; it is the chart-side hook for
-[`tractusx-edc#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678).
+the connector chart since [`tractusx-edc PR #2742`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742);
+it is the chart-side hook for
+[`tractusx-edc issue #2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678).
 The IH-side runtime implementation has not landed in `tractusx-edc`
 `main`, so we leave this **`false` in v1** (a `true` value is a no-op
-without #2678).
+without the #2678 implementation).
 
 ### 5.3 Templated `_dcp.tpl` partial
 
@@ -349,7 +354,9 @@ chart values stay declarative.
   adopter-facing profile, modeled on the existing
   `values-adopter-data-exchange.yaml`. Sets
   `identityProvider.type: identityhub` and uses YAML anchors to remove
-  the per-participant duplication that PR #396 carries.
+  the per-participant duplication that
+  [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396)
+  carries.
 - `charts/values-test-data-exchange-identityhub.yaml` — CI mirror
   profile, used by a new step in
   [`.github/workflows/helm-checks.yaml`](../../../.github/workflows/helm-checks.yaml):
@@ -371,7 +378,9 @@ flag must be set in IH mode on:
   verification).
 
 The IH chart's ingress must serve `/{base64url-did}/did.json` on the
-*same* hostname encoded into the DID. PR #396 has a working example.
+*same* hostname encoded into the DID.
+[`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396)
+has a working example.
 
 ### 5.8 Trusted-issuers list
 
@@ -482,9 +491,10 @@ deliverable.
 
 Out-of-band:
 
-- `tractusx-edc#2678` — R26.06 deliverable, **deferred to v2**, not a
-  v1 dependency.
-- Portal-backend BYOW — already merged (`portal-backend#1422`),
+- [`tractusx-edc issue #2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
+  — R26.06 deliverable, **deferred to v2**, not a v1 dependency.
+- Portal-backend BYOW — already merged
+  ([`portal-backend PR #1422`](https://github.com/eclipse-tractusx/portal-backend/pull/1422)),
   consumed in a v2 Portal+IH integration workstream.
 
 ---
@@ -493,12 +503,12 @@ Out-of-band:
 
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
-| R1 | PR #258 stalls again in review (DNS-label fix iteration). | Medium | Pick up the suggested `printf \| trunc 63 \| trimSuffix "-"` helper directly. The change is mechanical. |
+| R1 | [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) stalls again in review (DNS-label fix iteration). | Medium | Pick up the suggested `printf \| trunc 63 \| trimSuffix "-"` helper directly. The change is mechanical. |
 | R2 | The `initial-participant` `services[]` schema extension (§4.3.3) is rejected upstream or slips. | Medium | The §5.4 Job is the contingency: it calls the IH Identity Admin API directly (`POST /v1alpha/.../endpoints`). The Job is required regardless for credential issuance, so the marginal cost is small. |
 | R3 | STS shape spike (§6.1) shows option B unviable **and** option A requires a chart PR. | Medium | Sequence the spike before §5.5 finalisation. If both are blocked, v1 contributes the `dcp.sts.embedded` chart block to `tractusx-edc` — a ~50-line PR. |
-| R4 | The `iatp → dcp` migration breaks PR #396 and other in-flight branches. | High | Communicate the migration explicitly. Coordinate with `AYaoZhan` (who owns PR #258, the IH `initial-participant` refactor, and umbrella PR #396). |
+| R4 | The `iatp → dcp` migration breaks [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396) and other in-flight branches. | High | Communicate the migration explicitly. Coordinate with [`@AYaoZhan`](https://github.com/AYaoZhan) (who owns [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258), the IH `initial-participant` refactor, and umbrella PR #396). |
 | R5 | IH chart's templated ConfigMap names truncate and overlap across two participants. | Low (after R1) | Add a `helm template`-based CI lint in this repo that asserts uniqueness of all rendered ConfigMap `metadata.name` values across a two-participant install. |
-| R6 | `did:web` resolution fails because IH ingress hostname does not match the DID host segment. | Medium | Reuse the ingress shape verified in PR #396; cover with a CI smoke probe in §5.6. |
+| R6 | `did:web` resolution fails because IH ingress hostname does not match the DID host segment. | Medium | Reuse the ingress shape verified in [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396); cover with a CI smoke probe in §5.6. |
 | R7 | Adopters silently mix wallet-stub and IH modes (e.g. half the participants on each). | Low | Validate `identityProvider.type` consistency in the `_dcp.tpl` partial; fail `helm template` early. |
 
 ---
@@ -520,7 +530,8 @@ These do not block the plan, but they sharpen specific deliverables.
    visible to `AYaoZhan` (current module owner). If accepted, the §5.4
    Job's IH-endpoint step disappears.
 4. **Portal 26.03 chart release date.** Confirms when the v2 Portal+IH
-   workstream can begin. Tracked in `sig-release#1160`.
+   workstream can begin. Tracked in
+   [`sig-release#1160`](https://github.com/eclipse-tractusx/sig-release/issues/1160).
 
 ---
 
@@ -528,27 +539,63 @@ These do not block the plan, but they sharpen specific deliverables.
 
 1. **Approve scope as data-exchange-only for v1.** The Portal /
    onboarding stack stays on the wallet stub; Portal+IH is a v2
-   workstream that depends on the already-merged `portal-backend#1422`
+   workstream that depends on the already-merged
+   [`portal-backend PR #1422`](https://github.com/eclipse-tractusx/portal-backend/pull/1422)
    plus a Portal chart 26.03 bump.
 2. **Land §5.2 (`iatp → dcp` migration) first**, independent of the
    IdentityHub work. It is a prerequisite for *any* `tractusx-connector`
    chart bump and is otherwise risk-free.
-3. **Sequence remaining work behind PR #258.** Once
-   `tractusx-identityhub` 0.2.1 publishes, §5.1, §5.3, §5.4, §5.5, §5.6,
-   §5.7, §5.8, §5.9 are unblocked in parallel.
+3. **Sequence remaining work behind
+   [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258).**
+   Once `tractusx-identityhub` 0.2.1 publishes, §5.1, §5.3, §5.4, §5.5,
+   §5.6, §5.7, §5.8, §5.9 are unblocked in parallel.
 4. **Run the §6.1 STS spike now.** It does not block planning, but it
    pins down the shape of §5.5 and the upstream `tractusx-edc` chart
    work (if any).
-5. **Treat `tractusx-edc#2678` as v2 / R26.06 work.** The chart toggle
-   exists today; the IH-side runtime implementation is upstream-deferred
-   and would, if landed early, force a breaking change on every
-   existing DIM adopter.
-6. **Coordinate with `AYaoZhan` and `wahidulazam`.** They own the
+5. **Treat [`tractusx-edc issue #2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
+   as v2 / R26.06 work.** The chart toggle exists today; the IH-side
+   runtime implementation is upstream-deferred and would, if landed
+   early, force a breaking change on every existing DIM adopter.
+6. **Coordinate with [`@AYaoZhan`](https://github.com/AYaoZhan) and
+   [`@wahidulazam`](https://github.com/wahidulazam).** They own the
    reference implementations across `tractusx-identityhub`,
-   `tractus-x-umbrella` PR #396, and the `Federity-X` `dcp-v2` branch.
+   [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396),
+   and the
+   [`Federity-X dcp-v2` branch](https://github.com/Federity-X/public-tractusx-edc/tree/dcp-v2).
    Aligning with their work avoids parallel implementations.
 
 This plan is anchored against the current `main` branches of
-`tractusx-identityhub`, `tractusx-edc`, `bpn-did-resolution-service`,
-`portal-backend`, and `tractus-x-umbrella`, plus PR #258, PR #2742,
-PR #396, issue #2678, and the Federity-X `dcp-v2` reference flow.
+[`tractusx-identityhub`](https://github.com/eclipse-tractusx/tractusx-identityhub),
+[`tractusx-edc`](https://github.com/eclipse-tractusx/tractusx-edc),
+[`bpn-did-resolution-service`](https://github.com/eclipse-tractusx/bpn-did-resolution-service),
+[`portal-backend`](https://github.com/eclipse-tractusx/portal-backend),
+and [`tractus-x-umbrella`](https://github.com/eclipse-tractusx/tractus-x-umbrella),
+plus the following primary references:
+
+- [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258)
+  — templated ConfigMap names, charts to v0.2.1.
+- [`tractusx-identityhub Issue #257`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/257)
+  — companion issue for PR #258.
+- [`tractusx-edc PR #2742`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)
+  — `iatp` → `dcp` chart-values rename and `participant.id` schema split.
+- [`tractusx-edc Issue #2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
+  — `DidDocumentServiceIdentityHubClient` SPI implementation, deferred
+  to R26.06.
+- [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396)
+  — first Helm-layer integration attempt.
+- [`bpn-did-resolution-service PR #400`](https://github.com/eclipse-tractusx/bpn-did-resolution-service/pull/400)
+  — cloud-pirates Helm-chart alignment (post-0.6.0 maintenance).
+- [`portal-backend PR #1422`](https://github.com/eclipse-tractusx/portal-backend/pull/1422)
+  — Bring-Your-Own-Wallet onboarding flow (merged 7 Jan 2026).
+- [`portal-frontend-registration PR #407`](https://github.com/eclipse-tractusx/portal-frontend-registration/pull/407)
+  — companion frontend BYOW step.
+- [`eclipse-edc/IdentityHub PR #880`](https://github.com/eclipse-edc/IdentityHub/pull/880)
+  — OAuth2 on the Issuer-Admin API (merged 3 Dec 2025).
+- [`sig-release Issue #1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609)
+  — R26.06 IH + Connector bundle.
+- [`sig-release Issue #1160`](https://github.com/eclipse-tractusx/sig-release/issues/1160)
+  — onboarding-process & DCP-issuance flow for BYOW.
+- [`Federity-X/public-tractusx-edc#dcp-v2`](https://github.com/Federity-X/public-tractusx-edc/tree/dcp-v2)
+  — end-to-end Docker Compose reference flow.
+- [`Federity-X PR #8`](https://github.com/Federity-X/public-tractusx-edc/pull/8)
+  — IdentityHub `DidDocumentServiceClient` reference implementation.
