@@ -809,7 +809,92 @@ These do not block the plan, but they sharpen specific deliverables.
 
 ---
 
-## 10. Recommendation
+## 10. Open issues and PRs across Tractus-X (tracking)
+
+This section catalogues every currently-open issue / PR (as of 5 May
+2026) across the Tractus-X repos that this plan touches, and maps each
+to the section(s) it gates or informs. Anything closed and already
+shipped is referenced inline in the relevant section above and is not
+repeated here.
+
+### 10.1 R26.06 release-management trackers (`eclipse-tractusx/sig-release`)
+
+| Issue | Title | Relation to this plan |
+|---|---|---|
+| [`#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609) | [Identity Hub][Connector] Create a bundle for IdentityHub and Connector | **Primary meta-tracker.** Schedules the joint IH + Connector bundle for R26.06; gates the upstream-EDC line bumps in Section 2.5. |
+| [`#1610`](https://github.com/eclipse-tractusx/sig-release/issues/1610) | [IdentityHub][Umbrella] Upgrade the Portal with SSI Issuer Service component to support the Identity Hub | Tracks the v2 Portal+IH workstream; out of scope for v1 (Section 4.6) but determines when v2 can start. |
+| [`#1637`](https://github.com/eclipse-tractusx/sig-release/issues/1637) | [R26.06] [IdentityHub] Release Checks | TRG/release-readiness gate for `tractusx-identityhub`; closing this is a prerequisite for the chart bumps named in Section 2.5. |
+| [`#1635`](https://github.com/eclipse-tractusx/sig-release/issues/1635) | Release Checks - Summary check - R26.03 | Carries over the R26.03 IH release findings into R26.06 planning. |
+
+### 10.2 `eclipse-tractusx/tractusx-edc` — open issues & PRs
+
+| Item | Title | Relation to this plan |
+|---|---|---|
+| [`#2595`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2595) | Integrate upstream connector 0.16 | **Direct gate** for Section 2.5 first bump (`edc = 0.15.1` → `0.16.0`) and for Section 5.2. Marked `critical`. |
+| [`#2683`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2683) | Multi-Tenant Adaptations | Informs Section 2.4 (per-participant deployment topology); not a v1 blocker but pins the longer-term direction. |
+| [`#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678) | feat(did): IdentityHub-based `DidDocumentServiceClient` for DID self-registration | Already cited in Sections 4.4 / 6.2 / Recommendation; treated as v2 / R26.06 work. |
+| [`#2465`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2465) | Catena-X TCK | Conformance regression suite that should run green against the post-bump build (Sections 5.2 / 5.5). |
+| PR [`#2759`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2759) | feat: move additional headers decoration to dataplane | Independent dataplane refactor; flagged here so the `tractusx-connector` chart release that contains [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) is unambiguous. |
+
+### 10.3 `eclipse-tractusx/tractusx-identityhub` — open issues & PRs
+
+| Item | Title | Relation to this plan |
+|---|---|---|
+| [`#198`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/198) | Upgrade EDC from 0.14.0 to 0.15.1 | **Partial gate** for Section 2.5 second bump. Note: this issue stops at 0.15.1; reaching the 0.16.0 (or 0.17.0) target named in Section 2.5 still requires a follow-up upstream bump beyond this issue. |
+| [`#257`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/257) / PR [`#258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) | Templated ConfigMap names | Already cited in Sections 4.3.1 and 5.3 — chart `v0.2.1` precondition. |
+| [`#187`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/187) | Missing implementations in Upstream | Catalogue of upstream gaps Tractus-X IH carries patches for; informs the "no compatibility shim" statement in Section 2.5. |
+| [`#175`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/175) | IdentityHub Upgrade to PostgreSQL 18.x | Aligns IH-bundled Postgres (`12.12.x` today, Section 2.5) with BDRS 0.6.0 (already on PG 18). Same R26.06 milestone. |
+| [`#197`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/197) | Automate Tests for Issuance and Presentation Flows | Provides the automated coverage Section 5.4 (post-install seeding Job) will rely on for regression. |
+| [`#237`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/237) | Bug when deploying Identity Hub and Issuer Service in Kubernetes | Open k8s deployment bug — must be either fixed or worked around before Section 5.1 can land in the umbrella. |
+| [`#232`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/232) | Bug when deploying identityHub with ingress | Same class as #237; affects Section 2.4 deployment topology. R26.06 milestone. |
+| [`#137`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/137) | Frontend skeleton for IH with VC visualization | Out of v1 scope; relates to v2 Portal+IH (Section 4.6). |
+| [`#136`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/136) | Signing Module for Verifiable Credentials with Security | Out of v1 scope; future replacement of the seeded-credential mechanism in Section 5.4. |
+| [`#112`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/112) | Define how to integrate the identity hub with the portal issuance flow | The umbrella-side counterpart of `sig-release#1610`; v2 only. |
+
+### 10.4 `eclipse-tractusx/tractus-x-umbrella` — open PRs
+
+| Item | Title | Relation to this plan |
+|---|---|---|
+| PR [`#396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396) | feat: identityhub data exchange | **The active integration PR** — directly implements Sections 5.1, 5.3, 5.4, 5.6, 5.9. Authored by [`@AYaoZhan`](https://github.com/AYaoZhan). This plan should converge with PR #396 rather than duplicate it. |
+
+`tractus-x-umbrella` issue [`#382`](https://github.com/eclipse-tractusx/tractus-x-umbrella/issues/382)
+("HACKATHON: Integrate Identity Hub with Umbrella") was closed
+yesterday; PR #396 is its production-grade follow-up.
+
+### 10.5 `eclipse-tractusx/ssi-dim-wallet-stub` — open bugs (legacy profile)
+
+| Item | Title | Relation to this plan |
+|---|---|---|
+| [`#105`](https://github.com/eclipse-tractusx/ssi-dim-wallet-stub/issues/105) | Interoperability issue in cross-dataspace flow | Strengthens the migration motivation (Section 1) — the wallet stub is no longer interoperable in cross-dataspace presentations. |
+| [`#98`](https://github.com/eclipse-tractusx/ssi-dim-wallet-stub/issues/98) | NPE in `queryPresentations` when `tractusx-edc` 0.11.2 sends token without nested `ACCESS_TOKEN`/`TOKEN` claim | Token-shape mismatch identical in nature to the EDC-line drift documented in Section 2.5. |
+| [`#97`](https://github.com/eclipse-tractusx/ssi-dim-wallet-stub/issues/97), [`#93`](https://github.com/eclipse-tractusx/ssi-dim-wallet-stub/issues/93), [`#92`](https://github.com/eclipse-tractusx/ssi-dim-wallet-stub/issues/92) | Migration / chart / ingress bugs | Operational debt on the legacy `wallet-stub` profile — does not block this plan but reinforces deprecating the stub once Section 5.1 ships. |
+
+### 10.6 `eclipse-tractusx/bpn-did-resolution-service`
+
+Only open PR is [`#348`](https://github.com/eclipse-tractusx/bpn-did-resolution-service/pull/348)
+(ArgoCD Postgres migration guide, draft). Operational documentation
+only; not a blocker. BDRS is already on the target EDC line
+(Section 2.5).
+
+### 10.7 What's missing (no tracking issue exists yet)
+
+Two pieces of the plan have no upstream tracking issue today:
+
+1. **`tractusx-identityhub`: bump `edc` from 0.15.1 → 0.16.0 (target 0.17.0).**
+   Issue [`#198`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/198)
+   only covers the 0.14 → 0.15.1 step. The follow-up bump that
+   Section 2.5 requires for DCP composability with `tractusx-edc`
+   needs a new issue (or an extension of #198). **Action:** open it,
+   referencing this section.
+2. **Umbrella-side regression matrix for IH ↔ EDC line alignment.**
+   No issue currently asserts the umbrella will fail CI when
+   `tractusx-connector` and `tractusx-identityhub` charts pull
+   incompatible upstream-EDC lines. **Action:** open an umbrella
+   issue tied to Section 2.5 to add a chart-level pin check.
+
+---
+
+## 11. Recommendation
 
 1. **Approve scope as data-exchange-only for v1.** The Portal /
    onboarding stack stays on the wallet stub; Portal+IH is a v2
