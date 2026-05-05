@@ -79,6 +79,188 @@ SPI in `tractusx-edc`. We discuss two ways to satisfy this requirement
 (declarative seeding at install time vs. runtime mutation through the
 SPI) in Section 6.
 
+### 2.1 Identity data model
+
+Each participant carries a triple of identifiers. The schema split in
+[`tractusx-edc PR #2742`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)
+exposes all three on the connector chart's `participant.*` block:
+
+| Field | Type | Source of truth | Used for |
+|---|---|---|---|
+| `participant.id` | `did:web:<host>:<bpnl>` | minted by the operator at onboarding | DSP `dspace:participantId`, DCP token `iss/sub`, DID-document URL |
+| `participant.bpnl` | `BPNL[0-9A-Z]{12}` | Catena-X BPDM | BDRS lookup key, business-level identifier in VCs |
+| `participant.contextId` | UUID | minted by IH at participant creation | IH-internal participant context (path segment in `/v1/unstable/participants/{contextId}/...`); decouples the DID from IH's storage primary key so a DID can be rotated without rebuilding IH state |
+
+Worked example (umbrella default `dataconsumerOne`):
+
+```text
+bpnl       = BPNL00000003AZQP
+host       = dataconsumer-1-identityhub.tx.test
+participant.id  = did:web:dataconsumer-1-identityhub.tx.test:BPNL00000003AZQP
+contextId  = 11111111-1111-1111-1111-111111111111   # seeded by chart values
+```
+
+The corresponding DID Document (served by IH at
+`http://dataconsumer-1-identityhub.tx.test/BPNL00000003AZQP/did.json`
+when `didweb.https=false`) has the shape:
+
+```json
+{
+  "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/suites/jws-2020/v1"],
+  "id": "did:web:dataconsumer-1-identityhub.tx.test:BPNL00000003AZQP",
+  "verificationMethod": [{
+    "id": "did:web:...:BPNL00000003AZQP#key-1",
+    "type": "JsonWebKey2020",
+    "controller": "did:web:...:BPNL00000003AZQP",
+    "publicKeyJwk": { "kty": "EC", "crv": "P-256", "x": "...", "y": "...", "kid": "key-1" }
+  }],
+  "authentication":      ["did:web:...:BPNL00000003AZQP#key-1"],
+  "assertionMethod":     ["did:web:...:BPNL00000003AZQP#key-1"],
+  "service": [
+    { "id": "#credential-service",
+      "type": "CredentialService",
+      "serviceEndpoint": "http://dataconsumer-1-identityhub.tx.test/api/credentials/v1/participants/<base64url-did>" },
+    { "id": "#data-service",
+      "type": "DataService",
+      "serviceEndpoint": "http://dataconsumer-1-controlplane.tx.test/api/v1/dsp" }
+  ]
+}
+```
+
+Two invariants hold across the umbrella:
+
+1. The **DID host segment** equals the IH ingress host. If they
+   diverge, `did:web` resolution fails (Risk R6).
+2. The **JWK `kid`** in `verificationMethod[0].publicKeyJwk` matches the
+   `kid` of the private JWK seeded into Vault at alias
+   `tokenSignerPrivateKey` (Section 5.5). The connector signs SI-tokens
+   with that private key; verifiers fetch the public JWK via DID
+   resolution.
+
+### 2.2 Trust model and credential lifecycle
+
+Three actors, three duties:
+
+| Actor | Run by | Duty |
+|---|---|---|
+| **Issuer** | `tractusx-issuerservice` | Mints VCs (`MembershipCredential`, `BpnCredential`, `UsagePurposeCredential`, `DataExchangeGovernanceCredential`); maintains a status list for revocation. Its DID is the **trust anchor** for every verifier. |
+| **Holder** | each participant's `tractusx-identityhub` | Stores received VCs in IH Postgres; on a DCP presentation request, builds a Verifiable Presentation (VP), signs it with the participant's `tokenSignerPrivateKey`, returns it. |
+| **Verifier** | each participant's `tractusx-edc` connector | On every DSP step requiring proof, calls the counter-party's CredentialService, verifies VP signature against the counter-party's DID Document, checks each VC's `issuer` against the configured `dcp.trustedIssuers[]`, and checks status-list. |
+
+Lifecycle for one participant:
+
+```
+onboarding (manual / Section 5.4 Job)
+   │
+   ▼
+IssuerService participant + attestation + credentialDefinition  (5.4 step 3)
+   │
+   ▼
+Issuance request per VC type            ────►   VC stored in holder's IH    (5.4 step 4)
+                                                (Postgres table 'credentials')
+   │
+   ▼
+DSP runtime: catalog / contract / transfer
+   │
+   ▼
+Verifier requests presentation ────►  Holder IH at /api/credentials/v1/...
+                                      Holder builds VP, signs with tokenSigner
+                                      Verifier checks status-list at IssuerService
+```
+
+**Status-list strategy.** IssuerService publishes a
+`StatusList2021Credential` at a stable URL; each issued VC carries a
+`credentialStatus` pointer with bit position. Verifiers MUST resolve
+the status credential at verification time. v1 ships with all
+issued VCs marked active (no revocation tooling).
+
+**Trust anchor in v1.** A single IssuerService instance running at
+`did:web:tractusx-issuerservice.tx.test:BPNL00000003CRHK` is the
+trust anchor for the data-exchange profile. The connector's
+`dcp.trustedIssuers[]` lists exactly this DID with the four supported
+VC types. Adopters wishing to swap the trust anchor change one umbrella
+value (Section 5.8).
+
+### 2.3 Runtime call sequence — DSP exchange in IdentityHub mode
+
+This is the runtime view that complements the build-time critical path
+in §7. Provider P offers an asset; Consumer C requests it.
+
+```
+C-connector ──(1) GET /catalog─────────────────────────► P-connector
+                                                          │
+                                  (2) BDRS GET /api/directory?bpn=<C.bpnl>
+                                                          ▼
+                                                       BDRS-server  ── returns C.did
+                                                          │
+                                  (3) DID resolution     ▼
+                                  http://<C.host>/<C.bpnl>/did.json   (C's IH ingress)
+                                                          │
+                                  (4) DSP CredentialRequest with required scopes
+P-connector ──────────────────────────────────────────► C-IH /api/credentials/v1
+                                                          │
+                                  (5) VP built+signed     ▼
+                                       (kid=key-1, alg=ES256)
+                                       returns to P-connector
+                                                          │
+                                  (6) verify VP sig (against C DID Doc)
+                                      check trustedIssuers
+                                      resolve status-list at IssuerService
+                                                          │
+                                  (7) issue catalog / contract offer ────────► C
+                                                          │
+            on contract agreement:  STS round-trip per §6.1 option B/A
+                                                          │
+                                  (8) DataPlane EDR token issued, transfer starts
+```
+
+Steps 4–6 repeat for the contract-negotiation and transfer-process
+phases (each requires fresh proof). Every IH call uses the holder's
+own DID context; no pod talks to another participant's IH directly.
+
+### 2.4 Per-participant deployment topology
+
+Per participant the following pods run in the umbrella namespace
+(connector pods unchanged from today):
+
+| Pod | Image | Ports | Ingress hostname | Auth |
+|---|---|---|---|---|
+| `<p>-identityhub` | `tractusx-identityhub` | 8081 health, 8082 admin, 8083 credentials, 8084 DID, 8085 STS-acct, 8086 well-known, 8087 STS | `<p>-identityhub.tx.test` (must equal DID host segment) | `X-Api-Key` on 8082/8085; DCP token on 8083; per-token on 8087 |
+| `<p>-identityhub-postgresql` | `bitnami/postgresql` | 5432 | none | participant-scoped credentials |
+| `<p>-vault` | `hashicorp/vault` | 8200 | none | Vault token; seeded by `postStart` (5.5) |
+| `<p>-controlplane`, `<p>-dataplane` | `tractusx-connector` | as today | `<p>-controlplane.tx.test`, `<p>-dataplane.tx.test` | as today |
+
+Cluster-shared:
+
+| Pod | Image | Hostname | Purpose |
+|---|---|---|---|
+| `bdrs-server-memory` | `bdrs-server-memory` | `bdrs-server-memory` (svc) | BPN↔DID directory; **not** ingress-exposed |
+| `tractusx-issuerservice` | `tractusx-issuerservice` | `tractusx-issuerservice.tx.test` | issuance, status-list |
+
+The hostname↔DID invariant from §2.1 means an adopter renaming the IH
+ingress **must** re-issue every participant's DID. There is no
+runtime-rename path in v1.
+
+### 2.5 Version compatibility matrix
+
+The plan assumes a single coherent set of versions. v1 pins:
+
+| Component | Version | Pinned in | Source / gate |
+|---|---|---|---|
+| `eclipse-edc/IdentityHub` (upstream) | 0.17.0 | IH chart appVersion | already released |
+| `eclipse-edc/Connector` (upstream) | 0.16.0 | tx-edc dependency | already released |
+| `tractusx-identityhub` chart | `>= 0.2.1` | `charts/identity-and-trust-bundle/Chart.yaml` (5.1) | gated on PR #258 + 4.3.2 |
+| `tractusx-issuerservice` chart | `>= 0.2.1` | same | gated on 4.3.4 publish |
+| `tractusx-edc` chart (`tractusx-connector`) | TBD — first release containing PR #2742 | `charts/umbrella/values.yaml` connector blocks | required for `iatp`→`dcp` schema |
+| `bdrs-server-memory` chart | 0.6.0 | umbrella deps | already released; PR #400 maintenance applied |
+| `ssi-dim-wallet-stub` chart | 0.1.17 | retained for legacy `wallet-stub` profile | feature-flag-gated (5.1) |
+| Postgres (per-IH) | as bundled by `tractusx-identityhub` chart | upstream default | — |
+| Vault (per participant) | as bundled by `dataspace-connector-bundle` | upstream default | — |
+
+**Single open pin: the connector chart version that first contains
+[`tractusx-edc PR #2742`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742).**
+This pin lands together with §5.2.
+
 ---
 
 ## 3. Current-state analysis of the umbrella
@@ -340,15 +522,25 @@ vault.server.postStart:
 
 For IdentityHub mode the same Vault must instead hold:
 
-| Alias | Purpose |
-|---|---|
-| `tokenSignerPrivateKey` | EC/RSA JWK used by the participant's signer (alias already declared in [`charts/dataspace-connector-bundle/values.yaml`](../../../charts/dataspace-connector-bundle/values.yaml) line 135 — only the `postStart` seed is missing) |
-| `tokenSignerPublicKey` | Verifier-side JWK matching the `did:web` `verificationMethod` |
-| `identityhub-api-key` | X-Api-Key for the IH Identity Admin API |
+| Alias | Purpose | Algorithm | Lifecycle |
+|---|---|---|---|
+| `tokenSignerPrivateKey` | EC JWK used by the participant's signer (alias already declared at [`charts/dataspace-connector-bundle/values.yaml`](../../../charts/dataspace-connector-bundle/values.yaml) line 135 — only the `postStart` seed is missing) | EC P-256 (`alg=ES256`); v1 default. Ed25519 (`EdDSA`) optional once IH chart `signer.algorithm` value supports it. | generated by post-install Job; rotation = re-run Job, IH `verificationMethod` rewritten via `/v1/unstable/participants/{ctx}/keys`. v1 has no automatic rotation. |
+| `tokenSignerPublicKey` | Public JWK whose `kid` MUST match the `did:web` Document `verificationMethod[0].publicKeyJwk.kid` (see §2.1 invariant 2). | derived from private | bundled into the DID Document at seed time by the IH `initial-participant` extension (4.3.3). |
+| `identityhub-api-key` | X-Api-Key consumed by the post-install Job (5.4) and by the `DidDocumentServiceIdentityHubClient` if v2 adopts it (4.4.3). | n/a (opaque) | seeded by `postStart`; no rotation in v1. |
 
-Implementation: branch the `postStart` block on `identityProvider.type`,
-or — preferably — generate keys inside the post-install Job so the
-chart values stay declarative.
+Key-generation locus is the **post-install Job** (Section 5.4), not the
+Vault `postStart` block. `postStart` only runs Vault-CLI commands; key
+generation belongs in the Job's container so the umbrella values stay
+declarative and reproducible. The Job:
+
+1. Generates an EC P-256 keypair (e.g. `openssl ecparam -genkey`),
+   converts to JWK with a deterministic `kid` (`key-1`).
+2. Writes the private JWK to `secret/<participant>/tokenSignerPrivateKey`.
+3. Hands the public JWK to the IH Identity Admin API so it lands in
+   the DID Document `verificationMethod`.
+
+Branch the existing `postStart` block on `identityProvider.type` only
+for the `identityhub-api-key` alias (a static value safe to template).
 
 ### 5.6 New adopter profile + CI profile
 
@@ -426,11 +618,28 @@ Secure Token Service. With DIM the connector calls
 
 **Recommendation.** Schedule a focused validation against
 `tractusx-edc` `RemoteSecureTokenService` to determine whether option B
-works as-is. If yes, v1 ships option B. If no, v1 ships option A with
-the appropriate
-`controlplane.env` overrides; if that, too, requires a chart change,
-v1 ships an upstream `tractusx-edc` chart PR exposing
-`dcp.sts.embedded`.
+works as-is. If yes, v1 ships option B. If no, v1 ships option A.
+
+**Plan-A sketch** (sts-embedded fallback). The eclipse-edc
+`sts-embedded` runtime expects the controlplane to load a signer JWK
+and to mint SI-tokens locally. With the `tokenSignerPrivateKey` already
+staged in Vault (Section 5.5), the connector controlplane env in IH
+mode would carry:
+
+```yaml
+controlplane:
+  env:
+    EDC_IAM_STS_PRIVATEKEY_ALIAS: tokenSignerPrivateKey
+    EDC_IAM_STS_PUBLICKEY_ID:     "did:web:...:BPNL...#key-1"
+    EDC_IAM_ISSUER_ID:            "did:web:...:BPNL..."
+    # and dcp.sts.div.url left UNSET so the embedded service is selected
+```
+
+Availability of these keys depends on whether the `tractusx-connector`
+image bundles `eclipse-edc` modules `sts-core` + `sts-api`. If yes, the
+chart needs only env-var overrides (no chart PR). If not, v1 ships an
+upstream `tractusx-edc` chart PR exposing `dcp.sts.embedded` and
+including the modules in the runtime image.
 
 This is the **single most important pre-flight check** for the whole
 plan. It does not block planning, but it determines whether Section 5.5's
@@ -507,7 +716,7 @@ Out-of-band:
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
 | R1 | [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) stalls again in review (DNS-label fix iteration). | Medium | Pick up the suggested `printf \| trunc 63 \| trimSuffix "-"` helper directly. The change is mechanical. |
-| R2 | The `initial-participant` `services[]` schema extension (Section 4.3.3) is rejected upstream or slips. | Medium | The Section 5.4 Job is the contingency: it calls the IH Identity Admin API directly (`POST /v1alpha/.../endpoints`). The Job is required regardless for credential issuance, so the marginal cost is small. |
+| R2 | The `initial-participant` `services[]` schema extension (Section 4.3.3) is rejected upstream or slips. | Medium | The Section 5.4 Job is the contingency: it calls the IH Identity Admin API directly (`POST /v1/unstable/participants/{contextId}/dids/{base64url-did}/endpoints?autoPublish=true`). The Job is required regardless for credential issuance, so the marginal cost is small. |
 | R3 | STS validation (Section 6.1) shows option B unviable **and** option A requires a chart PR. | Medium | Sequence the validation before finalizing Section 5.5. If both are blocked, v1 contributes the `dcp.sts.embedded` chart block to `tractusx-edc` via a small upstream PR. |
 | R4 | The `iatp → dcp` migration breaks [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396) and other in-flight branches. | High | Communicate the migration explicitly. Coordinate with [`@AYaoZhan`](https://github.com/AYaoZhan) (who owns [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258), the IH `initial-participant` refactor, and umbrella PR #396). |
 | R5 | IH chart's templated ConfigMap names truncate and overlap across two participants. | Low (after R1) | Add a `helm template`-based CI lint in this repo that asserts uniqueness of all rendered ConfigMap `metadata.name` values across a two-participant install. |
