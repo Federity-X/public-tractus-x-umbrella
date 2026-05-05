@@ -127,7 +127,7 @@ Wallet-agnostic. Confirmed against the v0.16.0 DCP modules.
 ### 4.2 `eclipse-edc/IdentityHub` — no changes needed
 
 Already at v0.17.0. The Identity Admin API
-(`/v1alpha/participants/{ctx}/dids/{did}/endpoints`) is stable. OAuth2
+(`/v1/unstable/participants/{ctx}/dids/{did}/endpoints`) is stable. OAuth2
 auth on the Issuer-Admin API was added in v0.16.0
 ([eclipse-edc/IdentityHub PR #880](https://github.com/eclipse-edc/IdentityHub/pull/880),
 merged 3 Dec 2025); Tractus-X simply consumes it.
@@ -175,7 +175,7 @@ the umbrella post-install Job (Section 5.4) focused on per-participant work.
 |---|---|---|
 | 4.4.1 | **`iatp` → `dcp` chart-values rename** consumed downstream. | Already on `main` via [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) (Dec 2025). Breaking for any chart consumer; the umbrella has not yet absorbed it. |
 | 4.4.2 | **`participant.id` schema split** into `{id (DID), bpnl, contextId (UUID)}`. | Same PR #2742. Equally breaking for the umbrella. |
-| 4.4.3 | **`DidDocumentServiceIdentityHubClient`** SPI implementation (parallel to the existing DIM client). | Reference implementation lives in [`Federity-X/public-tractusx-edc#7`](https://github.com/Federity-X/public-tractusx-edc/pull/7) → [`#8`](https://github.com/Federity-X/public-tractusx-edc/pull/8) → `dcp-v2` branch. Issue [`tractusx-edc#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678) tracks upstream landing; explicitly deferred to **R26.06** by the EDC Board (see [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609)) pending the IH 0.16.0 bump. |
+| 4.4.3 | **`DidDocumentServiceIdentityHubClient`** SPI implementation (parallel to the existing DIM client). | Reference implementation lives in [`Federity-X/public-tractusx-edc#7`](https://github.com/Federity-X/public-tractusx-edc/pull/7) → [`#8`](https://github.com/Federity-X/public-tractusx-edc/pull/8) → `dcp-v2` branch. Issue [`tractusx-edc#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678) tracks upstream landing; explicitly deferred to **R26.06** by the EDC Board (see [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609)) pending the IH 0.16.0 bump. The proposed runtime config introduces three new keys — `tx.edc.ih.identity.api.url`, `tx.edc.ih.participant.context.id`, `tx.edc.ih.identity.api.key.alias` — and the IH client activates **only when `tx.edc.iam.sts.dim.url` is unset** (mutually exclusive with the DIM client). |
 
 Tasks 4.4.1 and 4.4.2 are **prerequisites for any tractusx-connector
 chart bump** in the umbrella — they are not optional. Task 4.4.3 is
@@ -310,10 +310,12 @@ Job, executing in this order:
    `bdrs-server-memory:8081` for every participant's BPN→DID mapping.
    In the `-memory` variant the management auth uses
    `authKey: "password"` (plain string), so no Vault dependency.
-2. **IdentityHub service entries** — `POST /v1alpha/participants/{ctx}/dids/{base64url-did}/endpoints?autoPublish=true`
+2. **IdentityHub service entries** — `POST /v1/unstable/participants/{contextId}/dids/{base64url-did}/endpoints?autoPublish=true`
    to each IH `:8082/api/identity` with `X-Api-Key`, registering the
-   DSP `DataService` and `CredentialService` URLs. (This step disappears
-   once Section 4.3.3 lands.)
+   DSP `DataService` and `CredentialService` URLs. The `{did}` path
+   parameter is base64url-encoded; the `Service` body carries `id`,
+   `type` (`CredentialService` / `DataService`), and `serviceEndpoint`.
+   (This step disappears once Section 4.3.3 lands.)
 3. **IssuerService bootstrap** — participant + attestation +
    credential-definition setup for the four VC types
    (`MembershipCredential`, `BpnCredential`, `UsagePurposeCredential`,
