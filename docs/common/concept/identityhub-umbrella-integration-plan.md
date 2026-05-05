@@ -274,7 +274,7 @@ Mechanical changes:
 |---|---|
 | `iatp:` | `dcp:` |
 | `iatp.sts.dim.url` | `dcp.sts.div.url` |
-| `iatp.sts.oauth.{token_url, client.id, client.secret_alias}` | `dcp.sts.div.oauth.{token_url, client.id, client.secret_alias}` |
+| `iatp.sts.oauth.{token_url, client.id, client.secret_alias}` | `dcp.sts.oauth.{token_url, client.id, client.secret_alias}` |
 | `iatp.trustedIssuers[]` | `dcp.trustedIssuers[{id, supportedTypes}]` |
 | `participant.id: BPNL...` (BPN string) | `participant.id: did:web:...` (DID), `participant.bpnl: BPNL...`, `participant.contextId: <uuid>` |
 
@@ -340,7 +340,7 @@ For IdentityHub mode the same Vault must instead hold:
 
 | Alias | Purpose |
 |---|---|
-| `tokenSignerPrivateKey` | EC/RSA JWK used by the participant's signer |
+| `tokenSignerPrivateKey` | EC/RSA JWK used by the participant's signer (alias already declared in [`charts/dataspace-connector-bundle/values.yaml`](../../../charts/dataspace-connector-bundle/values.yaml) line 135 — only the `postStart` seed is missing) |
 | `tokenSignerPublicKey` | Verifier-side JWK matching the `did:web` `verificationMethod` |
 | `identityhub-api-key` | X-Api-Key for the IH Identity Admin API |
 
@@ -369,13 +369,13 @@ chart values stay declarative.
 
 `did:web:host:bpn` resolves over HTTPS by default. The umbrella runs
 in-cluster with self-signed TLS at best (`values-tls.yaml`). The
-connector already uses `EDC_IAM_DID_WEB_USE_HTTPS: false`; the same
-flag must be set in IH mode on:
+connector already uses `EDC_IAM_DID_WEB_USE_HTTPS: false` (9 occurrences
+in `charts/`); the equivalent must be set in IH mode on:
 
-- the connector control-plane and data-plane,
-- the IssuerService (resolves holder DIDs during issuance),
-- the IH itself (resolves trusted-issuer DIDs during presentation
-  verification).
+- the connector control-plane and data-plane (`EDC_IAM_DID_WEB_USE_HTTPS: false`),
+- the IssuerService (resolves holder DIDs during issuance — same env var),
+- the IH itself, via the chart key `didweb.https: false` (the IH chart
+  exposes this as a top-level toggle rather than an env var).
 
 The IH chart's ingress must serve `/{base64url-did}/did.json` on the
 *same* hostname encoded into the DID.
