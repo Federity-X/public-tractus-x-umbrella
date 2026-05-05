@@ -77,7 +77,7 @@ required there.
 URL) is delegated through the Tractus-X-specific `DidDocumentServiceClient`
 SPI in `tractusx-edc`. We discuss two ways to satisfy this requirement
 (declarative seeding at install time vs. runtime mutation through the
-SPI) in §6.
+SPI) in Section 6.
 
 ---
 
@@ -90,7 +90,7 @@ IdentityHub equivalent.
 
 | # | Consumer (umbrella values key) | Endpoint shape | IH-replaceable? |
 |---|---|---|---|
-| 1 | `tractusx-connector.iatp.sts.dim.url` (per participant, lines 1092 / 1183 / 1349) | DIM Secure Token Service `POST /api/sts` | ❌ Different shape — see §6.1 |
+| 1 | `tractusx-connector.iatp.sts.dim.url` (per participant, lines 1092 / 1183 / 1349) | DIM Secure Token Service `POST /api/sts` | ❌ Different shape — see Section 6.1 |
 | 2 | `tractusx-connector.iatp.sts.oauth.token_url` | OAuth2 client_credentials for DIM | ❌ Not used by IH |
 | 3 | `tractusx-connector.controlplane.env.TX_IAM_IATP_CREDENTIALSERVICE_URL` (lines 1100 / 1120 / 1191 / 1211 / 1357 / 1377) | DCP CredentialService API | ✅ IH **is** a CredentialService |
 | 4 | `tractusx-connector.controlplane.bdrs.server.url` (lines 1104 / 1195 / 1361) | BDRS `/api/v1/directory` | ✅ Repoint to real BDRS |
@@ -160,7 +160,7 @@ on `main`):
 
 A companion module, [`extensions/seed/super-user`](https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/extensions/seed/super-user),
 already seeds the super-user credential at install time, which keeps
-the umbrella post-install Job (§5.4) focused on per-participant work.
+the umbrella post-install Job (Section 5.4) focused on per-participant work.
 
 > Note on chart-key naming: the IH chart's initial-participant block is
 > still keyed `iatp:`. The connector chart was renamed `iatp` → `dcp` in
@@ -179,7 +179,7 @@ the umbrella post-install Job (§5.4) focused on per-participant work.
 
 Tasks 4.4.1 and 4.4.2 are **prerequisites for any tractusx-connector
 chart bump** in the umbrella — they are not optional. Task 4.4.3 is
-**not on the v1 critical path**: §5.3 below describes the
+**not on the v1 critical path**: Section 5.3 below describes the
 chart-time-seeding alternative that avoids needing it.
 
 ### 4.5 `eclipse-tractusx/bpn-did-resolution-service` — done
@@ -196,7 +196,7 @@ chart-time-seeding alternative that avoids needing it.
   `endpoints.directory` on `:8082 /api/directory`,
   `trustedIssuers: []`. There is **no `initialMappings` /
   `seed` / `bootstrap` block.** BPN→DID mappings must be loaded via
-  the management API after install (this drives §5.4).
+  the management API after install (this drives Section 5.4).
 
 ### 4.6 `eclipse-tractusx/portal-backend` — out of scope for v1
 
@@ -232,11 +232,11 @@ dependencies:
     repository: https://eclipse-tractusx.github.io/charts/dev
     condition: ssi-dim-wallet-stub.enabled
   - name: tractusx-identityhub
-    version: ">=0.2.1"   # gated on §4.3.1 + §4.3.2
+    version: ">=0.2.1"   # gated on 4.3.1 + 4.3.2
     repository: https://eclipse-tractusx.github.io/charts/dev
     condition: tractusx-identityhub.enabled
   - name: tractusx-issuerservice
-    version: ">=0.2.1"   # gated on §4.3.4
+    version: ">=0.2.1"   # gated on 4.3.4
     repository: https://eclipse-tractusx.github.io/charts/dev
     condition: tractusx-issuerservice.enabled
 ```
@@ -288,7 +288,7 @@ effect without the #2678 implementation).
 
 ### 5.3 Templated `_dcp.tpl` partial
 
-The four duplicated blocks identified in §3 collapse into one Helm
+The four duplicated blocks identified in Section 3 collapse into one Helm
 partial keyed on participant (`bpnl`, `host`, `contextId`) and
 `identityProvider.type`. The partial emits either the legacy
 `iatp:`-shaped block (stub mode) or the new `dcp:`-shaped block (IH
@@ -313,7 +313,7 @@ Job, executing in this order:
 2. **IdentityHub service entries** — `POST /v1alpha/participants/{ctx}/dids/{base64url-did}/endpoints?autoPublish=true`
    to each IH `:8082/api/identity` with `X-Api-Key`, registering the
    DSP `DataService` and `CredentialService` URLs. (This step disappears
-   once §4.3.3 lands.)
+   once Section 4.3.3 lands.)
 3. **IssuerService bootstrap** — participant + attestation +
    credential-definition setup for the four VC types
    (`MembershipCredential`, `BpnCredential`, `UsagePurposeCredential`,
@@ -431,7 +431,7 @@ v1 ships an upstream `tractusx-edc` chart PR exposing
 `dcp.sts.embedded`.
 
 This is the **single most important pre-flight check** for the whole
-plan. It does not block planning, but it determines whether §5.5's
+plan. It does not block planning, but it determines whether Section 5.5's
 Vault block holds the JWK or only the IH X-Api-Key.
 
 ### 6.2 DID-document service registration
@@ -442,7 +442,7 @@ Two options:
   module so chart values populate `services[]` on the seeded DID
   Document. The connector never mutates its DID at runtime;
   `dcp.didService.selfRegistration.enabled` stays `false`. Requires
-  §4.3.3 and the §5.4 fallback Job until §4.3.3 ships.
+  Section 4.3.3, plus the Section 5.4 fallback Job until 4.3.3 ships.
 - **Runtime registration (deferred)** — adopt the
   `DidDocumentServiceIdentityHubClient` SPI from
   [`tractusx-edc#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
@@ -474,20 +474,20 @@ deliverable.
 
                        [ tractusx-edc ]
                           iatp → dcp rename (PR #2742)    ✅ on main
-                          chart consumed downstream       🔴 §5.2
+                          chart consumed downstream       🔴 (5.2)
 
                               ▼
 
                   [ tractus-x-umbrella  (this repo) ]
-                     §5.1  feature flag + dependency     🔴
-                     §5.2  iatp → dcp migration          🔴 prerequisite
-                     §5.3  _dcp.tpl partial              🔴
-                     §5.4  post-install Job              🔴
-                     §5.5  conditional Vault postStart   🔴
-                     §5.6  adopter + CI profiles         🔴
-                     §5.7  did:web HTTP flag plumbing    🔴
-                     §5.8  trustedIssuers top-level      🔴
-                     §5.9  documentation                 🔴
+                     (5.1)  feature flag + dependency     🔴
+                     (5.2)  iatp → dcp migration          🔴 prerequisite
+                     (5.3)  _dcp.tpl partial              🔴
+                     (5.4)  post-install Job              🔴
+                     (5.5)  conditional Vault postStart   🔴
+                     (5.6)  adopter + CI profiles         🔴
+                     (5.7)  did:web HTTP flag plumbing    🔴
+                     (5.8)  trustedIssuers top-level      🔴
+                     (5.9)  documentation                 🔴
 ```
 
 Out-of-band:
@@ -505,11 +505,11 @@ Out-of-band:
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
 | R1 | [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) stalls again in review (DNS-label fix iteration). | Medium | Pick up the suggested `printf \| trunc 63 \| trimSuffix "-"` helper directly. The change is mechanical. |
-| R2 | The `initial-participant` `services[]` schema extension (§4.3.3) is rejected upstream or slips. | Medium | The §5.4 Job is the contingency: it calls the IH Identity Admin API directly (`POST /v1alpha/.../endpoints`). The Job is required regardless for credential issuance, so the marginal cost is small. |
-| R3 | STS validation (§6.1) shows option B unviable **and** option A requires a chart PR. | Medium | Sequence the validation before finalizing §5.5. If both are blocked, v1 contributes the `dcp.sts.embedded` chart block to `tractusx-edc` via a small upstream PR. |
+| R2 | The `initial-participant` `services[]` schema extension (Section 4.3.3) is rejected upstream or slips. | Medium | The Section 5.4 Job is the contingency: it calls the IH Identity Admin API directly (`POST /v1alpha/.../endpoints`). The Job is required regardless for credential issuance, so the marginal cost is small. |
+| R3 | STS validation (Section 6.1) shows option B unviable **and** option A requires a chart PR. | Medium | Sequence the validation before finalizing Section 5.5. If both are blocked, v1 contributes the `dcp.sts.embedded` chart block to `tractusx-edc` via a small upstream PR. |
 | R4 | The `iatp → dcp` migration breaks [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396) and other in-flight branches. | High | Communicate the migration explicitly. Coordinate with [`@AYaoZhan`](https://github.com/AYaoZhan) (who owns [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258), the IH `initial-participant` refactor, and umbrella PR #396). |
 | R5 | IH chart's templated ConfigMap names truncate and overlap across two participants. | Low (after R1) | Add a `helm template`-based CI lint in this repo that asserts uniqueness of all rendered ConfigMap `metadata.name` values across a two-participant install. |
-| R6 | `did:web` resolution fails because IH ingress hostname does not match the DID host segment. | Medium | Reuse the ingress shape verified in [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396); cover with a CI smoke probe in §5.6. |
+| R6 | `did:web` resolution fails because IH ingress hostname does not match the DID host segment. | Medium | Reuse the ingress shape verified in [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396); cover with a CI smoke probe in Section 5.6. |
 | R7 | Adopters silently mix wallet-stub and IH modes (e.g. half the participants on each). | Low | Validate `identityProvider.type` consistency in the `_dcp.tpl` partial; fail `helm template` early. |
 
 ---
@@ -521,14 +521,14 @@ These do not block the plan, but they sharpen specific deliverables.
 1. **STS validation.** Does eclipse-edc's `RemoteSecureTokenService` accept
    the IH `:8087/api/sts` request shape, or does it strictly require
   the DIV/DIM OAuth2 form? This determines whether
-   §6.1 is option A or option B.
+   Section 6.1 is option A or option B.
 2. **Chart-registry publication.**
    `helm search repo tractusx/tractusx-identityhub` and
-   `helm search repo tractusx/tractusx-issuerservice`. Confirms §4.3.4
+   `helm search repo tractusx/tractusx-issuerservice`. Confirms Section 4.3.4
    is satisfied without an additional pipeline change.
 3. **`initial-participant` services-schema ownership.** File the
-   §4.3.3 schema-extension issue against `tractusx-identityhub` so it is
-   visible to `AYaoZhan` (current module owner). If accepted, the §5.4
+   Section 4.3.3 schema-extension issue against `tractusx-identityhub` so it is
+   visible to `AYaoZhan` (current module owner). If accepted, the Section 5.4
    Job's IH-endpoint step disappears.
 4. **Portal 26.03 chart release date.** Confirms when the v2 Portal+IH
    workstream can begin. Tracked in
@@ -543,15 +543,15 @@ These do not block the plan, but they sharpen specific deliverables.
    workstream that depends on the already-merged
    [`portal-backend PR #1422`](https://github.com/eclipse-tractusx/portal-backend/pull/1422)
    plus a Portal chart 26.03 bump.
-2. **Land §5.2 (`iatp → dcp` migration) first**, independent of the
+2. **Land Section 5.2 (`iatp → dcp` migration) first**, independent of the
    IdentityHub work. It is a prerequisite for *any* `tractusx-connector`
    chart bump and is otherwise risk-free.
 3. **Sequence remaining work behind
    [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258).**
-   Once `tractusx-identityhub` 0.2.1 publishes, §5.1, §5.3, §5.4, §5.5,
-   §5.6, §5.7, §5.8, §5.9 are unblocked in parallel.
-4. **Run the §6.1 STS validation now.** It does not block planning, but it
-   pins down the shape of §5.5 and the upstream `tractusx-edc` chart
+   Once `tractusx-identityhub` 0.2.1 publishes, Sections 5.1 and 5.3
+   through 5.9 are unblocked in parallel.
+4. **Run the Section 6.1 STS validation now.** It does not block planning, but it
+   pins down the shape of Section 5.5 and the upstream `tractusx-edc` chart
    work (if any).
 5. **Treat [`tractusx-edc issue #2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
    as v2 / R26.06 work.** The chart toggle exists today; the IH-side
