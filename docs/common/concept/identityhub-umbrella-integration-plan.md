@@ -50,10 +50,10 @@ as a v2 follow-up rather than the v1 deliverable.
 - [`tractus-x-umbrella#396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396) — first Helm-layer attempt against the umbrella.
 
 These are the empirical anchors for this plan. They are not directly
-mergeable: PR #396 hard-disables the stub instead of feature-flagging,
-uses `file://` chart paths, depends on a `0.7.0-SNAPSHOT` BDRS, and
-requires a 12-step manual Bruno run. The work below distils the
-*correct* deliverables out of those references.
+mergeable: PR #396 disables the stub instead of feature-flagging, uses
+`file://` chart paths, depends on a `0.7.0-SNAPSHOT` BDRS, and requires
+a 12-step manual Bruno run. The work below extracts the required
+deliverables from those references.
 
 ---
 
@@ -140,7 +140,7 @@ and IssuerService.
 | # | Task | Status | Tracking |
 |---|---|---|---|
 | 4.3.1 | **Templated ConfigMap names** so two IH instances can coexist in one namespace. | In review (milestone `26.06`). 26 / 28 CI green. | [Issue #257](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/257) / [PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258). Bumps charts to **v0.2.1**. |
-| 4.3.2 | **Apply the 63-char DNS-label fix** on PR #258 (`printf "%s-config" \| trunc 63 \| trimSuffix "-"`). | Outstanding review comment. | Same PR #258. |
+| 4.3.2 | **Apply the 63-char DNS-label fix** on PR #258 (`printf "%s-config" \| trunc 63 \| trimSuffix "-"`). | Outstanding review comment. | [PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258). |
 | 4.3.3 | **Extend the `initial-participant` extension** to seed DID-document `services[]` entries (CredentialService, DataService) declaratively from chart values. | Module exists at [`extensions/identityhub/initial-participant`](https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/extensions/identityhub/initial-participant). Today it seeds *identity* (OAuth client + super-user X-Api-Key) but **not** `services[]`. Schema extension required. | New issue + PR. |
 | 4.3.4 | **Confirm `tractusx-issuerservice` and `tractusx-issuerservice-memory` chart variants** are published to `https://eclipse-tractusx.github.io/charts/dev`. | To verify via `helm search repo tractusx/`. | Release-pipeline check. |
 
@@ -205,7 +205,7 @@ chart-time-seeding alternative that avoids needing it.
 `26.03`, closes [`sig-release#1160`](https://github.com/eclipse-tractusx/sig-release/issues/1160)).
 The companion frontend PR
 [`portal-frontend-registration#407`](https://github.com/eclipse-tractusx/portal-frontend-registration/pull/407)
-remains open at the time of writing.
+is open.
 
 The umbrella's `charts/umbrella/values.yaml` line 109 already exposes
 `portal.backend.useDimWallet: true`. Setting it to `false` and
@@ -253,8 +253,8 @@ tractusx-identityhub:
 ```
 
 This contrasts with [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396),
-which hard-disables the stub. A feature flag keeps every existing
-wallet-stub adopter on a known-good code path.
+which disables the stub unconditionally. A feature flag keeps every
+existing wallet-stub adopter on a known-good code path.
 
 ### 5.2 Connector schema migration (`iatp` → `dcp`)
 
@@ -283,8 +283,8 @@ the connector chart since [`tractusx-edc PR #2742`](https://github.com/eclipse-t
 it is the chart-side hook for
 [`tractusx-edc issue #2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678).
 The IH-side runtime implementation has not landed in `tractusx-edc`
-`main`, so we leave this **`false` in v1** (a `true` value is a no-op
-without the #2678 implementation).
+`main`, so we leave this **`false` in v1** (a `true` value has no
+effect without the #2678 implementation).
 
 ### 5.3 Templated `_dcp.tpl` partial
 
@@ -295,9 +295,9 @@ partial keyed on participant (`bpnl`, `host`, `contextId`) and
 mode) with the right CredentialService URL, BDRS URL, trustedIssuers
 list, and STS configuration.
 
-This is a pure refactor — it is functionally a no-op for the existing
-wallet-stub profile if covered by the existing `values-test-data-exchange.yaml`
-CI run.
+This is a pure refactor. It has no functional impact on the existing
+wallet-stub profile when covered by the existing
+`values-test-data-exchange.yaml` CI run.
 
 ### 5.4 Post-install Job for BPN/DID seeding and credential issuance
 
@@ -418,13 +418,14 @@ Secure Token Service. With DIM the connector calls
 
 | Option | Mechanics | v1 fit |
 |---|---|---|
-| **A — Embedded STS** | Connector signs SI-tokens locally with a vault-stored JWK using eclipse-edc's `sts-embedded` runtime. | The `tractusx-connector` chart `main` does **not** expose `dcp.sts.embedded` keys today (only `dcp.sts.div`). Would require either an upstream chart PR or `controlplane.env` overrides whose support depends on which STS modules the runtime image bundles. **Verification spike required.** |
-| **B — IH STS at `:8087/api/sts`** | Re-point the connector's STS URL to the IH pod. | IH does ship STS at port 8087, but the request shape (`RemoteSecureTokenService` signed `client_assertion`) differs from the DIM/DIV shape (OAuth2-style). A direct re-point fails signature/shape validation without an adapter. **Verification spike required (~30 min source read on `RemoteSecureTokenService`).** |
+| **A — Embedded STS** | Connector signs SI-tokens locally with a vault-stored JWK using eclipse-edc's `sts-embedded` runtime. | The `tractusx-connector` chart `main` does **not** expose `dcp.sts.embedded` keys today (only `dcp.sts.div`). Would require either an upstream chart PR or `controlplane.env` overrides whose support depends on which STS modules the runtime image bundles. **Technical validation required.** |
+| **B — IH STS at `:8087/api/sts`** | Re-point the connector's STS URL to the IH pod. | IH does ship STS at port 8087, but the request shape (`RemoteSecureTokenService` signed `client_assertion`) differs from the DIM/DIV shape (OAuth2-style). A direct re-point fails signature/shape validation without an adapter. **Technical validation required (source inspection of `RemoteSecureTokenService`).** |
 | **C — Continue calling DIM STS** | Leave `dcp.sts.div.url` pointing at the wallet stub's `/api/sts` even when IH is enabled. | Defeats the point of replacing the stub for v1. ❌ Not viable. |
 
-**Recommendation.** Schedule the spike against `tractusx-edc`
-`RemoteSecureTokenService` to determine whether B works as-is. If yes,
-v1 ships option B. If no, v1 ships option A with the appropriate
+**Recommendation.** Schedule a focused validation against
+`tractusx-edc` `RemoteSecureTokenService` to determine whether option B
+works as-is. If yes, v1 ships option B. If no, v1 ships option A with
+the appropriate
 `controlplane.env` overrides; if that, too, requires a chart change,
 v1 ships an upstream `tractusx-edc` chart PR exposing
 `dcp.sts.embedded`.
@@ -505,7 +506,7 @@ Out-of-band:
 |---|---|---|---|
 | R1 | [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) stalls again in review (DNS-label fix iteration). | Medium | Pick up the suggested `printf \| trunc 63 \| trimSuffix "-"` helper directly. The change is mechanical. |
 | R2 | The `initial-participant` `services[]` schema extension (§4.3.3) is rejected upstream or slips. | Medium | The §5.4 Job is the contingency: it calls the IH Identity Admin API directly (`POST /v1alpha/.../endpoints`). The Job is required regardless for credential issuance, so the marginal cost is small. |
-| R3 | STS shape spike (§6.1) shows option B unviable **and** option A requires a chart PR. | Medium | Sequence the spike before §5.5 finalisation. If both are blocked, v1 contributes the `dcp.sts.embedded` chart block to `tractusx-edc` — a ~50-line PR. |
+| R3 | STS validation (§6.1) shows option B unviable **and** option A requires a chart PR. | Medium | Sequence the validation before finalizing §5.5. If both are blocked, v1 contributes the `dcp.sts.embedded` chart block to `tractusx-edc` via a small upstream PR. |
 | R4 | The `iatp → dcp` migration breaks [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396) and other in-flight branches. | High | Communicate the migration explicitly. Coordinate with [`@AYaoZhan`](https://github.com/AYaoZhan) (who owns [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258), the IH `initial-participant` refactor, and umbrella PR #396). |
 | R5 | IH chart's templated ConfigMap names truncate and overlap across two participants. | Low (after R1) | Add a `helm template`-based CI lint in this repo that asserts uniqueness of all rendered ConfigMap `metadata.name` values across a two-participant install. |
 | R6 | `did:web` resolution fails because IH ingress hostname does not match the DID host segment. | Medium | Reuse the ingress shape verified in [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396); cover with a CI smoke probe in §5.6. |
@@ -513,13 +514,13 @@ Out-of-band:
 
 ---
 
-## 9. Open questions / pre-flight verification
+## 9. Open questions / validation checks
 
 These do not block the plan, but they sharpen specific deliverables.
 
-1. **STS spike.** Does eclipse-edc's `RemoteSecureTokenService` accept
+1. **STS validation.** Does eclipse-edc's `RemoteSecureTokenService` accept
    the IH `:8087/api/sts` request shape, or does it strictly require
-   the DIV/DIM OAuth2 form? **~30 min source read.** Determines whether
+  the DIV/DIM OAuth2 form? This determines whether
    §6.1 is option A or option B.
 2. **Chart-registry publication.**
    `helm search repo tractusx/tractusx-identityhub` and
@@ -549,7 +550,7 @@ These do not block the plan, but they sharpen specific deliverables.
    [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258).**
    Once `tractusx-identityhub` 0.2.1 publishes, §5.1, §5.3, §5.4, §5.5,
    §5.6, §5.7, §5.8, §5.9 are unblocked in parallel.
-4. **Run the §6.1 STS spike now.** It does not block planning, but it
+4. **Run the §6.1 STS validation now.** It does not block planning, but it
    pins down the shape of §5.5 and the upstream `tractusx-edc` chart
    work (if any).
 5. **Treat [`tractusx-edc issue #2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
