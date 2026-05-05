@@ -69,9 +69,10 @@ deliverables from those references.
 
 **Wallet-agnostic protocol layer.** Eclipse EDC's DCP authentication,
 presentation verification, and SI-token validation paths are not
-wallet-specific. Both upstream Eclipse projects (`Connector` at 0.16.0,
-`IdentityHub` at 0.17.0) are already DCP-compliant; no change is
-required there.
+wallet-specific. The upstream Eclipse projects are already
+DCP-compliant on the 0.16+ line (`Connector` 0.16.0, `IdentityHub`
+0.17.0); no upstream change is required there. The work is to
+**re-pin the Tractus-X distributions** onto that line (Section 2.5).
 
 **Control over DID Document service entries** (DSP URL, CredentialService
 URL) is delegated through the Tractus-X-specific `DidDocumentServiceClient`
@@ -244,45 +245,81 @@ runtime-rename path in v1.
 ### 2.5 Version compatibility matrix
 
 DCP composability requires every Tractus-X repo in the data-exchange
-profile to align on the **same upstream Eclipse-EDC line**. Mixing —
-e.g. a `tractusx-edc` build linked against EDC 0.13 with a
-`tractusx-identityhub` build linked against IdentityHub 0.17 — produces
-incompatible DCP token, presentation, and STS shapes at runtime.
+profile to align on the **same upstream Eclipse-EDC line**. As of the
+current `main` of each repo (5 May 2026), the three Tractus-X repos
+that compose the data-exchange path are pinned to **three different
+upstream EDC versions**, which is the substantive obstacle this plan
+must close before v1 can ship.
 
-**Tractus-X → upstream Eclipse pin (the alignment v1 requires):**
+**Current state — what each Tractus-X repo points to today (`main`):**
 
-| Tractus-X repo | Tractus-X version (v1) | Required upstream | Upstream pin | Source / gate |
-|---|---|---|---|---|
-| `eclipse-tractusx/tractusx-identityhub` | chart `>= 0.2.1`, app builds against IH 0.17.0 | `eclipse-edc/IdentityHub` | **0.17.0** | IH chart `appVersion`; already released. Gates Section 5.1 once PR #258 + Section 4.3.2 land. |
-| `eclipse-tractusx/tractusx-identityhub` (IssuerService variant) | chart `>= 0.2.1` | `eclipse-edc/IdentityHub` (issuerservice modules) | **0.17.0** | same repo; published as `tractusx-issuerservice`. Gated on Section 4.3.4. |
-| `eclipse-tractusx/tractusx-edc` | TBD — first chart release containing [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) | `eclipse-edc/Connector` | **0.16.0** | tx-edc `gradle.properties` `edcVersion`. Required for `iatp`→`dcp` schema (Section 5.2). |
-| `eclipse-tractusx/bpn-did-resolution-service` | chart 0.6.0 | `eclipse-edc/Connector` | **0.16.0** | BDRS [release 0.6.0](https://github.com/eclipse-tractusx/bpn-did-resolution-service/releases) ships with EDC 0.16.0 + Postgres 18 (already released; Section 4.5). |
-| `eclipse-tractusx/ssi-dim-wallet-stub` | chart 0.1.17 | n/a (Tractus-X-only) | — | Retained for legacy `wallet-stub` profile via feature flag (Section 5.1). |
+| Tractus-X repo | Current TX version (`main`) | Current upstream pin | Where it's pinned |
+|---|---|---|---|
+| `eclipse-tractusx/tractusx-edc` | `0.13.0-SNAPSHOT` | `edc = "0.15.1"` (and `edc-next = "0.16.0"` for TCK only) | [`gradle/libs.versions.toml`](https://github.com/eclipse-tractusx/tractusx-edc/blob/main/gradle/libs.versions.toml) |
+| `eclipse-tractusx/tractusx-identityhub` | chart `v0.2.0`, app `0.2.0` | `edc = "0.14.0"` | [`gradle/libs.versions.toml`](https://github.com/eclipse-tractusx/tractusx-identityhub/blob/main/gradle/libs.versions.toml) |
+| `eclipse-tractusx/bpn-did-resolution-service` | `0.7.0-SNAPSHOT` (last release `0.6.0`) | `edc = "0.16.0"` | [`gradle/libs.versions.toml`](https://github.com/eclipse-tractusx/bpn-did-resolution-service/blob/main/gradle/libs.versions.toml) |
+| `eclipse-tractusx/ssi-dim-wallet-stub` | chart `0.1.17` | n/a (no Eclipse-EDC link) | — |
+
+The spread (EDC 0.14 ↔ 0.15.1 ↔ 0.16) is *the* problem statement.
+A `tractusx-edc` 0.13.0-SNAPSHOT build (EDC 0.15.1) wired against a
+`tractusx-identityhub` 0.2.0 build (EDC 0.14.0) will fail at runtime
+on:
+
+- DCP presentation-request shape (changed between EDC 0.14 and 0.15),
+- `participant.*` schema split — only present from EDC 0.16
+  ([PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)),
+- IH Identity Admin API path — `/v1/unstable/...` only exists from
+  IdentityHub 0.16 onward.
+
+There is **no compatibility shim** between these versions; the EDC
+project does not maintain backports.
+
+**Target state — what v1 requires (single coherent line):**
+
+| Tractus-X repo | Required TX version (v1) | Required upstream pin | Status / gate |
+|---|---|---|---|
+| `eclipse-tractusx/tractusx-edc` | first chart release containing [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) | `eclipse-edc/Connector` **≥ 0.16.0** | TX-EDC `main` must bump `edc = "0.16.0"` (currently 0.15.1). Tracked under [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609) (R26.06 bundle). |
+| `eclipse-tractusx/tractusx-identityhub` | chart `≥ 0.2.1`, app build re-pinned to IH 0.16+ | `eclipse-edc/IdentityHub` **≥ 0.16.0** (target 0.17.0 to pick up [PR #880](https://github.com/eclipse-edc/IdentityHub/pull/880) OAuth2 on Issuer-Admin API) | TX-IH `main` must bump `edc = "0.16.0"` (currently 0.14.0). Chart `v0.2.1` further requires PR #258 + Section 4.3.2 to land. |
+| `eclipse-tractusx/tractusx-identityhub` (IssuerService variant) | chart `≥ 0.2.1` | `eclipse-edc/IdentityHub` **≥ 0.16.0** | same repo, same bump. Gated on Section 4.3.4 publish. |
+| `eclipse-tractusx/bpn-did-resolution-service` | chart `0.6.0` (released) or later snapshot | `eclipse-edc/Connector` **0.16.0** | **already aligned** — BDRS is the only Tractus-X repo on the target EDC line today. |
+| `eclipse-tractusx/ssi-dim-wallet-stub` | chart `0.1.17` | n/a | retained for legacy `wallet-stub` profile via feature flag (Section 5.1). |
+
+**The two upstream-pin bumps that gate this plan** are therefore:
+
+1. **`tractusx-edc`: bump `edc` from 0.15.1 → 0.16.0** in
+   `gradle/libs.versions.toml` and cut a chart release. This is
+   precisely what [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609)
+   schedules into R26.06.
+2. **`tractusx-identityhub`: bump `edc` from 0.14.0 → 0.16.0 (or 0.17.0)**
+   in `gradle/libs.versions.toml` and cut chart `v0.2.1`. PR #258
+   (templated ConfigMap names) is the visible chart-side change but
+   the silent prerequisite is the upstream EDC bump.
+
+Both bumps are tracked by the EDC Board under R26.06 alongside
+[`tractusx-edc#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
+(IH client SPI). BDRS is already on 0.16.0 and needs no work here.
 
 **Why this alignment is non-negotiable.** The DCP modules in EDC 0.16
 introduced the `participant.contextId` / `participant.bpnl` schema
 split (Section 2.1) and the `dcp.*` config namespace
 ([PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)).
-The matching presentation-protocol changes landed in IdentityHub
-0.17 (`/v1/unstable/...` API surface, Section 4.2). A connector at
-EDC 0.13 talking to an IdentityHub at 0.17 will fail at the token-shape
-level, not just at config-key level — there is no compatibility shim.
-This is the substantive content of [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609)
-(R26.06 IH + Connector bundle).
+The matching presentation-protocol and Identity-Admin-API changes
+landed in IdentityHub 0.16+ (`/v1/unstable/...` surface, Section 4.2).
+Connector and IdentityHub running on different EDC lines fail at the
+token-shape and API-path level, not at config-key level.
 
 **Other umbrella deps (no upstream Eclipse pin needed):**
 
 | Component | Version | Source |
 |---|---|---|
-| Postgres (per-IH) | bundled by `tractusx-identityhub` chart | upstream default |
-| Vault (per participant) | bundled by `dataspace-connector-bundle` | upstream default |
+| Postgres (per-IH) | bundled by `tractusx-identityhub` chart (`postgresql 12.12.x`) | upstream default |
+| Vault (per participant) | bundled by `dataspace-connector-bundle` (`vault 0.29.1` in IH chart, `0.28.0` in tx-connector chart) | upstream default; minor mismatch acceptable |
 
-**Single open pin: the connector chart version that first contains
-[`tractusx-edc PR #2742`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742).**
-This pin lands together with Section 5.2. Until that chart cuts a
-release on `https://eclipse-tractusx.github.io/charts/dev`, the
-umbrella cannot consume the new `dcp.*` schema and Sections 5.1–5.9
-remain blocked behind it.
+**Open external dependency.** Until both upstream bumps above ship,
+the umbrella cannot consume the new `dcp.*` schema or the new IH
+API surface, and Sections 5.1–5.9 remain blocked. The umbrella's
+own deliverables are otherwise ready to land in the order described
+in Section 7.
 
 ---
 
@@ -331,11 +368,13 @@ Wallet-agnostic. Confirmed against the v0.16.0 DCP modules.
 
 ### 4.2 `eclipse-edc/IdentityHub` — no changes needed
 
-Already at v0.17.0. The Identity Admin API
-(`/v1/unstable/participants/{ctx}/dids/{did}/endpoints`) is stable. OAuth2
+Upstream is at v0.17.0 and already exposes the stable Identity Admin
+API (`/v1/unstable/participants/{ctx}/dids/{did}/endpoints`). OAuth2
 auth on the Issuer-Admin API was added in v0.16.0
 ([eclipse-edc/IdentityHub PR #880](https://github.com/eclipse-edc/IdentityHub/pull/880),
-merged 3 Dec 2025); Tractus-X simply consumes it.
+merged 3 Dec 2025); Tractus-X simply consumes it once
+`tractusx-identityhub` re-pins from `edc = 0.14.0` to `0.16.0`+
+(Section 2.5).
 
 ### 4.3 `eclipse-tractusx/tractusx-identityhub` — four tasks
 
