@@ -685,20 +685,20 @@ deliverable.
 
                        [ tractusx-edc ]
                           iatp → dcp rename (PR #2742)    ✅ on main
-                          chart consumed downstream       🔴 (5.2)
+                          chart consumed downstream       🔴 (Section 5.2)
 
                               ▼
 
                   [ tractus-x-umbrella  (this repo) ]
-                     (5.1)  feature flag + dependency     🔴
-                     (5.2)  iatp → dcp migration          🔴 prerequisite
-                     (5.3)  _dcp.tpl partial              🔴
-                     (5.4)  post-install Job              🔴
-                     (5.5)  conditional Vault postStart   🔴
-                     (5.6)  adopter + CI profiles         🔴
-                     (5.7)  did:web HTTP flag plumbing    🔴
-                     (5.8)  trustedIssuers top-level      🔴
-                     (5.9)  documentation                 🔴
+                     Section 5.1  feature flag + dependency     🔴
+                     Section 5.2  iatp → dcp migration          🔴 prerequisite
+                     Section 5.3  _dcp.tpl partial              🔴
+                     Section 5.4  post-install Job              🔴
+                     Section 5.5  conditional Vault postStart   🔴
+                     Section 5.6  adopter + CI profiles         🔴
+                     Section 5.7  did:web HTTP flag plumbing    🔴
+                     Section 5.8  trustedIssuers top-level      🔴
+                     Section 5.9  documentation                 🔴
 ```
 
 Out-of-band:
