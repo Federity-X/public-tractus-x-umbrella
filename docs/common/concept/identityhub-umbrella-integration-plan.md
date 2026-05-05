@@ -426,6 +426,41 @@ chart bump** in the umbrella — they are not optional. Task 4.4.3 is
 **not on the v1 critical path**: Section 5.3 below describes the
 chart-time-seeding alternative that avoids needing it.
 
+#### 4.4.3a Is `#2678` required? When is it useful?
+
+`DidDocumentServiceIdentityHubClient` is **optional for both v1 and
+v2**. It is *not* part of the DCP runtime path (STS mint →
+presentation request → presentation verification); the SPI it
+implements only runs at participant-onboarding / DID-document
+publication time. The DID document can equivalently be made
+discoverable by:
+
+| Approach | Where it runs | Used by | When it fits |
+|---|---|---|---|
+| **A. `did:web` ingress** (Section 5.7) | Per-participant ingress that serves `/.well-known/did.json` from a static ConfigMap. | v1 umbrella default. | Demo / adopter / CI deployments; low operational cost; no IH Identity-Admin call needed. |
+| **B. Helm post-install Job** (Section 5.4) | Cluster-side Job that POSTs to the IH Identity Admin API once after install. | v1 umbrella when IH-mode is selected. | Scripted Helm-only installations where there is no Portal in the loop. |
+| **C. Portal-driven registration** (path implied by [`sig-release#1610`](https://github.com/eclipse-tractusx/sig-release/issues/1610)) | `portal-backend` calls IH Identity Admin API as part of participant onboarding. | **Recommended v2 production path** under Catena-X / Portal-managed adopters. | The standard production lifecycle: every participant is created via Portal, so DID publication belongs there. |
+| **D. `DidDocumentServiceIdentityHubClient` (`#2678`)** | Connector startup; the connector self-registers its DID. | Optional v2.x enhancement. | Programmatic / non-Portal deployments where each connector owns its own DID lifecycle (e.g. CI dataspaces, Manufacturing-X spinoffs, multi-tenant operators that bypass Portal onboarding). |
+
+**Recommended production-grade approach.**
+
+- **v1 (this plan):** approach **A** for adopter / data-exchange demos
+  and approach **B** for IH-mode Helm-only installs. Neither requires
+  `#2678`.
+- **v2 (Portal + IH end-to-end):** approach **C** is the recommended
+  production path. DID publication is a Portal-side concern, which
+  keeps the connector startup config minimal and avoids per-connector
+  IH admin credentials.
+- **v2.x (non-Portal deployments):** approach **D** (`#2678`) is the
+  right choice when there is no Portal — e.g. self-hosted dataspaces,
+  CI environments, or multi-tenant operators. The umbrella should
+  ship `#2678` as an *opt-in* when it lands upstream, gated behind
+  `tx.edc.iam.sts.dim.url` being unset, so existing DIM adopters are
+  not broken.
+
+In all four cases the runtime DCP exchange behaves identically; the
+choice is purely about *who* publishes the DID document and *when*.
+
 ### 4.5 `eclipse-tractusx/bpn-did-resolution-service` — done
 
 - Release **0.6.0** with EDC 0.16.0 and Postgres 18 — already published.
@@ -832,7 +867,7 @@ repeated here.
 |---|---|---|
 | [`#2595`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2595) | Integrate upstream connector 0.16 | **Direct gate** for Section 2.5 first bump (`edc = 0.15.1` → `0.16.0`) and for Section 5.2. Marked `critical`. |
 | [`#2683`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2683) | Multi-Tenant Adaptations | Informs Section 2.4 (per-participant deployment topology); not a v1 blocker but pins the longer-term direction. |
-| [`#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678) | feat(did): IdentityHub-based `DidDocumentServiceClient` for DID self-registration | Already cited in Sections 4.4 / 6.2 / Recommendation; treated as v2 / R26.06 work. |
+| [`#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678) | feat(did): IdentityHub-based `DidDocumentServiceClient` for DID self-registration | **Optional for v1 and v2** — see Section 4.4.3a. Becomes useful in v2.x for non-Portal-managed deployments; recommended production path under Catena-X / Portal is the Portal-driven approach (`sig-release#1610`), not `#2678`. |
 | [`#2465`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2465) | Catena-X TCK | Conformance regression suite that should run green against the post-bump build (Sections 5.2 / 5.5). |
 | PR [`#2759`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2759) | feat: move additional headers decoration to dataplane | Independent dataplane refactor; flagged here so the `tractusx-connector` chart release that contains [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) is unambiguous. |
 
@@ -912,9 +947,13 @@ Two pieces of the plan have no upstream tracking issue today:
    pins down the shape of Section 5.5 and the upstream `tractusx-edc` chart
    work (if any).
 5. **Treat [`tractusx-edc issue #2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
-   as v2 / R26.06 work.** The chart toggle exists today; the IH-side
-   runtime implementation is upstream-deferred and would, if landed
-   early, force a breaking change on every existing DIM adopter.
+   as an *opt-in* v2.x enhancement, not a v1 or v2 requirement.** See
+   Section 4.4.3a. The recommended production path under Catena-X /
+   Portal is Portal-driven DID registration
+   ([`sig-release#1610`](https://github.com/eclipse-tractusx/sig-release/issues/1610));
+   `#2678` is the right choice only for non-Portal / programmatic
+   deployments and would, if landed early, force a breaking change on
+   every existing DIM adopter.
 6. **Coordinate with [`@AYaoZhan`](https://github.com/AYaoZhan) and
    [`@wahidulazam`](https://github.com/wahidulazam).** They own the
    reference implementations across `tractusx-identityhub`,
