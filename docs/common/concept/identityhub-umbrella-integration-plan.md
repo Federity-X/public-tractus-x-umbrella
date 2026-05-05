@@ -243,23 +243,46 @@ runtime-rename path in v1.
 
 ### 2.5 Version compatibility matrix
 
-The plan assumes a single coherent set of versions. v1 pins:
+DCP composability requires every Tractus-X repo in the data-exchange
+profile to align on the **same upstream Eclipse-EDC line**. Mixing —
+e.g. a `tractusx-edc` build linked against EDC 0.13 with a
+`tractusx-identityhub` build linked against IdentityHub 0.17 — produces
+incompatible DCP token, presentation, and STS shapes at runtime.
 
-| Component | Version | Pinned in | Source / gate |
-|---|---|---|---|
-| `eclipse-edc/IdentityHub` (upstream) | 0.17.0 | IH chart appVersion | already released |
-| `eclipse-edc/Connector` (upstream) | 0.16.0 | tx-edc dependency | already released |
-| `tractusx-identityhub` chart | `>= 0.2.1` | `charts/identity-and-trust-bundle/Chart.yaml` (Section 5.1) | gated on PR #258 + Section 4.3.2 |
-| `tractusx-issuerservice` chart | `>= 0.2.1` | same | gated on Section 4.3.4 publish |
-| `tractusx-edc` chart (`tractusx-connector`) | TBD — first release containing PR #2742 | `charts/umbrella/values.yaml` connector blocks | required for `iatp`→`dcp` schema |
-| `bdrs-server-memory` chart | 0.6.0 | umbrella deps | already released; PR #400 maintenance applied |
-| `ssi-dim-wallet-stub` chart | 0.1.17 | retained for legacy `wallet-stub` profile | feature-flag-gated (Section 5.1) |
-| Postgres (per-IH) | as bundled by `tractusx-identityhub` chart | upstream default | — |
-| Vault (per participant) | as bundled by `dataspace-connector-bundle` | upstream default | — |
+**Tractus-X → upstream Eclipse pin (the alignment v1 requires):**
+
+| Tractus-X repo | Tractus-X version (v1) | Required upstream | Upstream pin | Source / gate |
+|---|---|---|---|---|
+| `eclipse-tractusx/tractusx-identityhub` | chart `>= 0.2.1`, app builds against IH 0.17.0 | `eclipse-edc/IdentityHub` | **0.17.0** | IH chart `appVersion`; already released. Gates Section 5.1 once PR #258 + Section 4.3.2 land. |
+| `eclipse-tractusx/tractusx-identityhub` (IssuerService variant) | chart `>= 0.2.1` | `eclipse-edc/IdentityHub` (issuerservice modules) | **0.17.0** | same repo; published as `tractusx-issuerservice`. Gated on Section 4.3.4. |
+| `eclipse-tractusx/tractusx-edc` | TBD — first chart release containing [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) | `eclipse-edc/Connector` | **0.16.0** | tx-edc `gradle.properties` `edcVersion`. Required for `iatp`→`dcp` schema (Section 5.2). |
+| `eclipse-tractusx/bpn-did-resolution-service` | chart 0.6.0 | `eclipse-edc/Connector` | **0.16.0** | BDRS [release 0.6.0](https://github.com/eclipse-tractusx/bpn-did-resolution-service/releases) ships with EDC 0.16.0 + Postgres 18 (already released; Section 4.5). |
+| `eclipse-tractusx/ssi-dim-wallet-stub` | chart 0.1.17 | n/a (Tractus-X-only) | — | Retained for legacy `wallet-stub` profile via feature flag (Section 5.1). |
+
+**Why this alignment is non-negotiable.** The DCP modules in EDC 0.16
+introduced the `participant.contextId` / `participant.bpnl` schema
+split (Section 2.1) and the `dcp.*` config namespace
+([PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)).
+The matching presentation-protocol changes landed in IdentityHub
+0.17 (`/v1/unstable/...` API surface, Section 4.2). A connector at
+EDC 0.13 talking to an IdentityHub at 0.17 will fail at the token-shape
+level, not just at config-key level — there is no compatibility shim.
+This is the substantive content of [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609)
+(R26.06 IH + Connector bundle).
+
+**Other umbrella deps (no upstream Eclipse pin needed):**
+
+| Component | Version | Source |
+|---|---|---|
+| Postgres (per-IH) | bundled by `tractusx-identityhub` chart | upstream default |
+| Vault (per participant) | bundled by `dataspace-connector-bundle` | upstream default |
 
 **Single open pin: the connector chart version that first contains
 [`tractusx-edc PR #2742`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742).**
-This pin lands together with Section 5.2.
+This pin lands together with Section 5.2. Until that chart cuts a
+release on `https://eclipse-tractusx.github.io/charts/dev`, the
+umbrella cannot consume the new `dcp.*` schema and Sections 5.1–5.9
+remain blocked behind it.
 
 ---
 
