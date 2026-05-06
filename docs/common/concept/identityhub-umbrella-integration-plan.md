@@ -246,27 +246,32 @@ runtime-rename path in v1.
 
 DCP composability requires every Tractus-X repo in the data-exchange
 profile to align on the **same upstream Eclipse-EDC line**. As of the
-current `main` of each repo (5 May 2026), the three Tractus-X repos
-that compose the data-exchange path are pinned to **three different
-upstream EDC versions**, which is the substantive obstacle this plan
-must close before v1 can ship.
+current `main` of each repo (6 May 2026), `tractusx-edc` and
+`tractusx-identityhub` have just converged on `edc = "0.15.1"`, but
+`bpn-did-resolution-service` is already one step ahead on `0.16.0` —
+so the data-exchange path still spans two upstream EDC lines, which
+is the remaining obstacle this plan must close before v1 can ship.
 
 **Current state — what each Tractus-X repo points to today (`main`):**
 
 | Tractus-X repo | Current TX version (`main`) | Current upstream pin | Where it's pinned |
 |---|---|---|---|
 | `eclipse-tractusx/tractusx-edc` | `0.13.0-SNAPSHOT` | `edc = "0.15.1"` (and `edc-next = "0.16.0"` for TCK only) | [`gradle/libs.versions.toml`](https://github.com/eclipse-tractusx/tractusx-edc/blob/main/gradle/libs.versions.toml) |
-| `eclipse-tractusx/tractusx-identityhub` | chart `v0.2.0`, app `0.2.0` | `edc = "0.14.0"` | [`gradle/libs.versions.toml`](https://github.com/eclipse-tractusx/tractusx-identityhub/blob/main/gradle/libs.versions.toml) |
+| `eclipse-tractusx/tractusx-identityhub` | chart `v0.2.1`, app `0.2.0` (latest tag `v0.3.0-RC1`) | `edc = "0.15.1"` (just bumped from `0.14.0` via [PR #244](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/244)) | [`gradle/libs.versions.toml`](https://github.com/eclipse-tractusx/tractusx-identityhub/blob/main/gradle/libs.versions.toml) |
 | `eclipse-tractusx/bpn-did-resolution-service` | `0.7.0-SNAPSHOT` (last release `0.6.0`) | `edc = "0.16.0"` | [`gradle/libs.versions.toml`](https://github.com/eclipse-tractusx/bpn-did-resolution-service/blob/main/gradle/libs.versions.toml) |
 | `eclipse-tractusx/ssi-dim-wallet-stub` | chart `0.1.17` | n/a (no Eclipse-EDC link) | — |
 
-The spread (EDC 0.14 ↔ 0.15.1 ↔ 0.16) is *the* problem statement.
-A `tractusx-edc` 0.13.0-SNAPSHOT build (EDC 0.15.1) wired against a
-`tractusx-identityhub` 0.2.0 build (EDC 0.14.0) will fail at runtime
-on:
+The remaining spread (EDC 0.15.1 ↔ 0.15.1 ↔ 0.16.0) is *the* problem
+statement. A `tractusx-edc` 0.13.0-SNAPSHOT build (EDC 0.15.1) wired
+against a `tractusx-identityhub` `v0.2.1` build (EDC 0.15.1) will
+inter-operate on the DCP presentation-request shape (the 0.14↔0.15
+break is now resolved), but BDRS on `0.16.0` and the umbrella's
+required chart features still force a joint bump to `0.16.0`,
+because:
 
-- DCP presentation-request shape (changed between EDC 0.14 and 0.15),
 - `participant.*` schema split — only present from EDC 0.16
+  ([PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)),
+- `dcp.*` config namespace — only present from EDC 0.16
   ([PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)),
 - IH Identity Admin API path — `/v1/unstable/...` only exists from
   IdentityHub 0.16 onward.
@@ -279,8 +284,8 @@ project does not maintain backports.
 | Tractus-X repo | Required TX version (v1) | Required upstream pin | Status / gate |
 |---|---|---|---|
 | `eclipse-tractusx/tractusx-edc` | first chart release containing [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) | `eclipse-edc/Connector` **≥ 0.16.0** | TX-EDC `main` must bump `edc = "0.16.0"` (currently 0.15.1). Tracked under [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609) (R26.06 bundle). |
-| `eclipse-tractusx/tractusx-identityhub` | chart `≥ 0.2.1`, app build re-pinned to IH 0.16+ | `eclipse-edc/IdentityHub` **≥ 0.16.0** (target 0.17.0 to pick up [PR #880](https://github.com/eclipse-edc/IdentityHub/pull/880) OAuth2 on Issuer-Admin API) | TX-IH `main` must bump `edc = "0.16.0"` (currently 0.14.0). Chart `v0.2.1` further requires PR #258 + Section 4.3.2 to land. |
-| `eclipse-tractusx/tractusx-identityhub` (IssuerService variant) | chart `≥ 0.2.1` | `eclipse-edc/IdentityHub` **≥ 0.16.0** | same repo, same bump. Gated on Section 4.3.4 publish. |
+| `eclipse-tractusx/tractusx-identityhub` | chart `≥ 0.2.1`, app build re-pinned to IH 0.16+ | `eclipse-edc/IdentityHub` **≥ 0.16.0** (target 0.17.0 to pick up [PR #880](https://github.com/eclipse-edc/IdentityHub/pull/880) OAuth2 on Issuer-Admin API) | TX-IH `main` must bump `edc = "0.16.0"` (currently 0.15.1). Chart `v0.2.1` and templated ConfigMaps ([PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258)) have **already landed on `main`** (merged 6 May 2026, also in tag `v0.3.0-RC1`); only the upstream-EDC bump remains. |
+| `eclipse-tractusx/tractusx-identityhub` (IssuerService variant) | chart `≥ 0.2.1` (released) | `eclipse-edc/IdentityHub` **≥ 0.16.0** | same repo, same bump. Section 4.3.4 publish unblocked once `v0.2.1` releases of the IssuerService variant ship under the same tag train. |
 | `eclipse-tractusx/bpn-did-resolution-service` | chart `0.6.0` (released) or later snapshot | `eclipse-edc/Connector` **0.16.0** | **already aligned** — BDRS is the only Tractus-X repo on the target EDC line today. |
 | `eclipse-tractusx/ssi-dim-wallet-stub` | chart `0.1.17` | n/a | retained for legacy `wallet-stub` profile via feature flag (Section 5.1). |
 
@@ -290,10 +295,13 @@ project does not maintain backports.
    `gradle/libs.versions.toml` and cut a chart release. This is
    precisely what [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609)
    schedules into R26.06.
-2. **`tractusx-identityhub`: bump `edc` from 0.14.0 → 0.16.0 (or 0.17.0)**
-   in `gradle/libs.versions.toml` and cut chart `v0.2.1`. PR #258
-   (templated ConfigMap names) is the visible chart-side change but
-   the silent prerequisite is the upstream EDC bump.
+2. **`tractusx-identityhub`: bump `edc` from 0.15.1 → 0.16.0 (or 0.17.0)**
+   in `gradle/libs.versions.toml` (the 0.14 → 0.15.1 step has just
+   merged via [PR #244](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/244)).
+   The chart-side change ([PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258),
+   templated ConfigMap names) is also already merged and chart
+   `v0.2.1` is published; only the follow-up upstream EDC bump
+   to 0.16.0+ remains.
 
 Both bumps are tracked by the EDC Board under R26.06 alongside
 [`tractusx-edc#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678)
@@ -846,7 +854,7 @@ These do not block the plan, but they sharpen specific deliverables.
 
 ## 10. Open issues and PRs across Tractus-X (tracking)
 
-This section catalogues every currently-open issue / PR (as of 5 May
+This section catalogues every currently-open issue / PR (as of 6 May
 2026) across the Tractus-X repos that this plan touches, and maps each
 to the section(s) it gates or informs. Anything closed and already
 shipped is referenced inline in the relevant section above and is not
@@ -875,8 +883,8 @@ repeated here.
 
 | Item | Title | Relation to this plan |
 |---|---|---|
-| [`#198`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/198) | Upgrade EDC from 0.14.0 to 0.15.1 | **Partial gate** for Section 2.5 second bump. Note: this issue stops at 0.15.1; reaching the 0.16.0 (or 0.17.0) target named in Section 2.5 still requires a follow-up upstream bump beyond this issue. |
-| [`#257`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/257) / PR [`#258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) | Templated ConfigMap names | Already cited in Sections 4.3.1 and 5.3 — chart `v0.2.1` precondition. |
+| ~~[`#198`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/198)~~ (closed) / merged [PR #244](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/244) | Upgrade EDC from 0.14.0 to 0.15.1 | **Closed 6 May 2026** (also in tag `v0.3.0-RC1`). Resolved the 0.14 → 0.15.1 step of Section 2.5 and aligned `tractusx-identityhub` `main` with `tractusx-edc` `main`. The remaining 0.15.1 → 0.16.0 (target 0.17.0) follow-up is **not yet tracked** — see Section 10.7 item 1. |
+| ~~[`#257`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/257)~~ (closed) / merged [PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) | Templated ConfigMap names | **Merged 6 May 2026.** Bumped chart from `v0.2.0` to `v0.2.1` across `tractusx-identityhub`, `tractusx-identityhub-memory`, `tractusx-issuerservice` and `tractusx-issuerservice-memory`. Sections 4.3.1, 4.3.2 and 5.3 can now consume `v0.2.1` directly. |
 | [`#187`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/187) | Missing implementations in Upstream | Catalogue of upstream gaps Tractus-X IH carries patches for; informs the "no compatibility shim" statement in Section 2.5. |
 | [`#175`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/175) | IdentityHub Upgrade to PostgreSQL 18.x | Aligns IH-bundled Postgres (`12.12.x` today, Section 2.5) with BDRS 0.6.0 (already on PG 18). Same R26.06 milestone. |
 | [`#197`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/197) | Automate Tests for Issuance and Presentation Flows | Provides the automated coverage Section 5.4 (post-install seeding Job) will rely on for regression. |
@@ -916,11 +924,12 @@ only; not a blocker. BDRS is already on the target EDC line
 Two pieces of the plan have no upstream tracking issue today:
 
 1. **`tractusx-identityhub`: bump `edc` from 0.15.1 → 0.16.0 (target 0.17.0).**
-   Issue [`#198`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/198)
-   only covers the 0.14 → 0.15.1 step. The follow-up bump that
-   Section 2.5 requires for DCP composability with `tractusx-edc`
-   needs a new issue (or an extension of #198). **Action:** open it,
-   referencing this section.
+   Closed issue [`#198`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/198)
+   only covered the 0.14 → 0.15.1 step (merged 6 May 2026 via
+   [PR #244](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/244),
+   tag `v0.3.0-RC1`). The follow-up bump that Section 2.5 requires
+   for DCP composability with a `tractusx-edc` build on EDC 0.16
+   needs a new issue. **Action:** open it, referencing this section.
 2. **Umbrella-side regression matrix for IH ↔ EDC line alignment.**
    No issue currently asserts the umbrella will fail CI when
    `tractusx-connector` and `tractusx-identityhub` charts pull
