@@ -820,11 +820,12 @@ deliverable.
 
 ```
 [ tractusx-identityhub ]                      [ bpn-did-resolution-service ]
-   PR #258 templated CMs        🟡                   v0.6.0 released         ✅
-   63-char DNS-label fix        🟡                   (memory chart, no
-   initial-participant +                              chart-time seeding)
+   PR #258 templated CMs        ✅ merged 6 May      v0.6.0 released         ✅
+   chart publish v0.2.1         ✅ in v0.3.0-RC1     (memory chart, no
+   63-char DNS-label fix        ⚪ follow-up,         chart-time seeding)
+                                  not blocking
+   initial-participant +
        services[] schema PR     🟡 NEW
-   chart publish v0.2.1         🟡
 
                               ▼
 
