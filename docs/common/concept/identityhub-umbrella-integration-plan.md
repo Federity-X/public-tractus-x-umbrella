@@ -269,15 +269,35 @@ break is now resolved), but BDRS on `0.16.0` and the umbrella's
 required chart features still force a joint bump to `0.16.0`,
 because:
 
-- `participant.*` schema split — only present from EDC 0.16
-  ([PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)),
-- `dcp.*` config namespace — only present from EDC 0.16
-  ([PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742)),
+- `participant.*` schema split (`participant.contextId` /
+  `participant.bpnl`) — introduced upstream in `eclipse-edc/Connector`
+  **0.16.0**; consumed in Tractus-X via
+  [`tractusx-edc#2742`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742),
+- `dcp.*` config namespace — same upstream 0.16 source; same
+  consumer PR [`tractusx-edc#2742`](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742),
 - IH Identity Admin API path — `/v1/unstable/...` only exists from
-  IdentityHub 0.16 onward.
+  `eclipse-edc/IdentityHub` **0.16** onward.
 
 There is **no compatibility shim** between these versions; the EDC
 project does not maintain backports.
+
+**Hidden cost of the IH 0.15.1 → 0.16.0 follow-up bump.** Beyond the
+single `edc` line, `tractusx-identityhub` `main` still trails
+`tractusx-edc` and `bpn-did-resolution-service` on the surrounding
+build stack:
+
+| Tooling pin | `tractusx-edc` (`main`) | `bpn-did-resolution-service` (`main`) | `tractusx-identityhub` (`main`) |
+|---|---|---|---|
+| `edc-build` plugin | `1.5.2` | `1.5.2` | `1.1.6` |
+| Flyway | `12.4.0` | `12.5.0` | `11.15.0` |
+| Shadow plugin | `9.4.1` | `9.4.1` | `9.3.1` |
+
+These are not runtime-incompatible, but the EDC 0.16 follow-up bump
+in tx-IH will also have to advance `edc-build`, Flyway and Shadow to
+the lines tx-edc and BDRS already use — otherwise the BOM resolution
+for EDC 0.16 modules will not converge against `edc-build 1.1.6`.
+This is the silent second-order work behind Section 2.5's required
+bump 2.
 
 **Target state — what v1 requires (single coherent line):**
 
@@ -320,8 +340,28 @@ token-shape and API-path level, not at config-key level.
 
 | Component | Version | Source |
 |---|---|---|
-| Postgres (per-IH) | bundled by `tractusx-identityhub` chart (`postgresql 12.12.x`) | upstream default |
-| Vault (per participant) | bundled by `dataspace-connector-bundle` (`vault 0.29.1` in IH chart, `0.28.0` in tx-connector chart) | upstream default; minor mismatch acceptable |
+| Postgres (per-IH) | bundled by `tractusx-identityhub` chart (Bitnami `postgresql 12.12.x`) | upstream default |
+| Postgres (per-Connector and per-BDRS) | bundled by `tractusx-connector` chart and `bdrs-server` chart (Cofinity-X / `cloudpirates postgres 0.18.3`, **PG 18 image**) | upstream default |
+| Vault (per participant) | `0.29.1` in IH chart, `0.28.0` in tx-connector + BDRS charts (all from `helm.releases.hashicorp.com`) | upstream default; minor mismatch acceptable |
+
+Note that the umbrella inherits **two different Postgres helm chart
+families** — Bitnami `postgresql` (PG 14–15 image) from the IH chart
+vs. cloudpirates `postgres` (PG 18 image) from the tx-connector and
+BDRS charts. This is the operational footprint behind
+[`tractusx-identityhub#175`](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/175)
+(Section 10.3); resolving that issue collapses the umbrella to a
+single Postgres chart family.
+
+**`main` vs. what the umbrella actually ships.** Section 2.5 above
+describes the **`main`** branch of each Tractus-X repo. The
+umbrella's `dataspace-connector-bundle/Chart.yaml` currently pins
+`tractusx-connector` to the **released chart `0.11.2`** (not
+`0.13.0-SNAPSHOT` from `main`); chart `0.11.2` predates the EDC
+0.14→0.15.1 line and therefore predates the alignment described
+above. So the umbrella's effective EDC line today is older than
+any row in the table above. Section 3 picks up that umbrella-side
+delta in detail; Section 5.2 names the chart-bump migration
+required to close it.
 
 **Open external dependency.** Until both upstream bumps above ship,
 the umbrella cannot consume the new `dcp.*` schema or the new IH
