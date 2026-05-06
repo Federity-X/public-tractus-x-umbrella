@@ -431,8 +431,8 @@ and IssuerService.
 
 | # | Task | Status | Tracking |
 |---|---|---|---|
-| 4.3.1 | **Templated ConfigMap names** so two IH instances can coexist in one namespace. | In review (milestone `26.06`). 26 / 28 CI green. | [Issue #257](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/257) / [PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258). Bumps charts to **v0.2.1**. |
-| 4.3.2 | **Apply the 63-char DNS-label fix** on PR #258 (`printf "%s-config" \| trunc 63 \| trimSuffix "-"`). | Outstanding review comment. | [PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258). |
+| 4.3.1 | **Templated ConfigMap names** so two IH instances can coexist in one namespace. | **Merged 6 May 2026** (also in tag `v0.3.0-RC1`). | [Issue #257](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/257) (closed) / [PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) (merged). Bumped charts to **v0.2.1**. |
+| 4.3.2 | **Apply the 63-char DNS-label fix** suggested on PR #258 (`printf "%s-config" \| trunc 63 \| trimSuffix "-"`). | Copilot review comments **left unresolved at merge**; the suggestion was not applied. | Needs a follow-up PR against `tractusx-identityhub` `main` if long release names trigger the truncation in practice; otherwise low-priority hardening. |
 | 4.3.3 | **Extend the `initial-participant` extension** to seed DID-document `services[]` entries (CredentialService, DataService) declaratively from chart values. | Module exists at [`extensions/identityhub/initial-participant`](https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/extensions/identityhub/initial-participant). Today it seeds *identity* (OAuth client + super-user X-Api-Key) but **not** `services[]`. Schema extension required. | New issue + PR. |
 | 4.3.4 | **Confirm `tractusx-issuerservice` and `tractusx-issuerservice-memory` chart variants** are published to `https://eclipse-tractusx.github.io/charts/dev`. | To verify via `helm search repo tractusx/`. | Release-pipeline check. |
 
@@ -465,7 +465,7 @@ the umbrella post-install Job (Section 5.4) focused on per-participant work.
 
 | # | Task | Status |
 |---|---|---|
-| 4.4.1 | **`iatp` → `dcp` chart-values rename** consumed downstream. | Already on `main` via [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) (Dec 2025). Breaking for any chart consumer; the umbrella has not yet absorbed it. |
+| 4.4.1 | **`iatp` → `dcp` chart-values rename** consumed downstream. | Already on `main` via [PR #2742](https://github.com/eclipse-tractusx/tractusx-edc/pull/2742) (merged April 2026). Breaking for any chart consumer; the umbrella has not yet absorbed it. |
 | 4.4.2 | **`participant.id` schema split** into `{id (DID), bpnl, contextId (UUID)}`. | Same PR #2742. Equally breaking for the umbrella. |
 | 4.4.3 | **`DidDocumentServiceIdentityHubClient`** SPI implementation (parallel to the existing DIM client). | Reference implementation lives in [`Federity-X/public-tractusx-edc#7`](https://github.com/Federity-X/public-tractusx-edc/pull/7) → [`#8`](https://github.com/Federity-X/public-tractusx-edc/pull/8) → `dcp-v2` branch. Issue [`tractusx-edc#2678`](https://github.com/eclipse-tractusx/tractusx-edc/issues/2678) tracks upstream landing; explicitly deferred to **R26.06** by the EDC Board (see [`sig-release#1609`](https://github.com/eclipse-tractusx/sig-release/issues/1609)) pending the IH 0.16.0 bump. The proposed runtime config introduces three new keys — `tx.edc.ih.identity.api.url`, `tx.edc.ih.participant.context.id`, `tx.edc.ih.identity.api.key.alias` — and the IH client activates **only when `tx.edc.iam.sts.dim.url` is unset** (mutually exclusive with the DIM client). |
 
@@ -860,7 +860,7 @@ Out-of-band:
 
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
-| R1 | [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) stalls again in review (DNS-label fix iteration). | Medium | Pick up the suggested `printf \| trunc 63 \| trimSuffix "-"` helper directly. The change is mechanical. |
+| R1 | The 63-char DNS-label hardening Copilot suggested on [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258) (now merged) was not applied at merge time and trips on long release names in the umbrella. | Low | Mechanical follow-up PR with the suggested `printf \| trunc 63 \| trimSuffix "-"` helper; can also be worked around at the umbrella by capping the release name. |
 | R2 | The `initial-participant` `services[]` schema extension (Section 4.3.3) is rejected upstream or slips. | Medium | The Section 5.4 Job is the contingency: it calls the IH Identity Admin API directly (`POST /v1/unstable/participants/{contextId}/dids/{base64url-did}/endpoints?autoPublish=true`). The Job is required regardless for credential issuance, so the marginal cost is small. |
 | R3 | STS validation (Section 6.1) shows option B unviable **and** option A requires a chart PR. | Medium | Sequence the validation before finalizing Section 5.5. If both are blocked, v1 contributes the `dcp.sts.embedded` chart block to `tractusx-edc` via a small upstream PR. |
 | R4 | The `iatp → dcp` migration breaks [`tractus-x-umbrella PR #396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396) and other in-flight branches. | High | Communicate the migration explicitly. Coordinate with [`@AYaoZhan`](https://github.com/AYaoZhan) (who owns [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258), the IH `initial-participant` refactor, and umbrella PR #396). |
@@ -941,8 +941,10 @@ repeated here.
 | PR [`#396`](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/396) | feat: identityhub data exchange | **The active integration PR** — directly implements Sections 5.1, 5.3, 5.4, 5.6, 5.9. Authored by [`@AYaoZhan`](https://github.com/AYaoZhan). This plan should converge with PR #396 rather than duplicate it. |
 
 `tractus-x-umbrella` issue [`#382`](https://github.com/eclipse-tractusx/tractus-x-umbrella/issues/382)
-("HACKATHON: Integrate Identity Hub with Umbrella") was closed
-yesterday; PR #396 is its production-grade follow-up.
+("HACKATHON: Integrate Identity Hub with Umbrella") was closed as
+completed on 4 May 2026; PR #396 is its production-grade follow-up
+(open against the dedicated `identityhub-data-exchange` branch, not
+`main`, per the author's own scoping note).
 
 ### 10.5 `eclipse-tractusx/ssi-dim-wallet-stub` — open bugs (legacy profile)
 
@@ -988,10 +990,10 @@ Two pieces of the plan have no upstream tracking issue today:
 2. **Land Section 5.2 (`iatp → dcp` migration) first**, independent of the
    IdentityHub work. It is a prerequisite for *any* `tractusx-connector`
    chart bump and is otherwise risk-free.
-3. **Sequence remaining work behind
-   [`tractusx-identityhub PR #258`](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258).**
-   Once `tractusx-identityhub` 0.2.1 publishes, Sections 5.1 and 5.3
-   through 5.9 are unblocked in parallel.
+3. **`tractusx-identityhub` chart `v0.2.1` is now released.**
+   [PR #258](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/258)
+   merged on 6 May 2026 (also in tag `v0.3.0-RC1`). Sections 5.1 and
+   5.3 through 5.9 can be unblocked in parallel against `v0.2.1`.
 4. **Run the Section 6.1 STS validation now.** It does not block planning, but it
    pins down the shape of Section 5.5 and the upstream `tractusx-edc` chart
    work (if any).
