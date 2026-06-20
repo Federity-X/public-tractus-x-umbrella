@@ -4,7 +4,187 @@
 > **Milestone:** Tractus-X 26.06
 > **Labels:** `tractusx-edc`, `tractusx-identityhub`, `tractus-x-umbrella`, `Prep-R26.06`
 > **Owner (us):** @wahidulazam (contributor); committers: @matbmoser, @CDiezRodriguez, @mgarciaLKS
-> **Status of this plan:** draft v3, 2026-04-19 — **D10 resolved** (switched to postgres IssuerService variant); full-umbrella kind test green through §6. See `docs/common/concept/1609-local-test-findings.md#phase-11` for the validation log and 4 incidental fixes (D12–D15) uncovered along the way.
+> **Status of this plan:** **2026-06-19 — TEST CASE 1 PASSES.** Full DCP data-exchange (catalog → negotiation → transfer → fetch) validated end-to-end on the shared-IdentityHub profile, including on the **stock** connector image. See **§0.1** for the authoritative current standing — it supersedes the gaps (G1–G6), runtime assumptions (§11.4 R1–R3), Definition of Done (§8) and most version facts below.
+> **Re-plan history:** 2026-06-18 — latest-component check + per-participant feasibility (**§0.0**). 2026-04-19 draft v3 — D10 resolved (postgres IssuerService); see `docs/common/concept/1609-local-test-findings.md#phase-11`.
+
+---
+
+## 0.0 — 2026-06-18 re-plan: latest-component check + per-participant feasibility
+
+**Trigger:** _"use the latest components; can we now achieve per-participant topology?"_
+
+**Component release check** — Tractus-X `charts/dev` channel, the only channel
+these EDC-aligned charts publish to (a `stable`-channel copy does **not** exist
+yet; verified `helm search repo tractusx-stable/*` → no results):
+
+| Component                           | Umbrella pin (now) | Latest released                        | Verdict                                                                       |
+| ----------------------------------- | ------------------ | -------------------------------------- | ----------------------------------------------------------------------------- |
+| `tractusx-identityhub-memory`       | **v0.3.2**         | **v0.3.2** (2026-06-16)                | ✅ already newest                                                             |
+| `tractusx-issuerservice` (postgres) | **v0.3.2**         | **v0.3.2**                             | ✅ already newest                                                             |
+| `tractusx-connector`                | **0.13.0-rc2**     | `0.12.1` stable · `0.13.0` still `-rc` | ⚠️ on an RC ahead of stable (kept on purpose — DCP-native, matches IH 0.16.0) |
+| `bdrs-server-memory`                | 0.6.0              | 0.6.0                                  | ✅ newest                                                                     |
+| `digital-twin-registry`             | 0.10.0             | 0.12.0                                 | ⬆️ 2 minors behind (optional housekeeping)                                    |
+| `ssi-dim-wallet-stub`               | 0.1.14             | 0.1.18                                 | ⬆️ behind (default path; optional)                                            |
+
+v0.3.2 (2 days old) brings EDC 0.16.0, configurable VC-type scope aliases
+(IH #279), custom attestation tables (IH #299) and idempotent issuance
+migrations (IH #291). **None of these touch deployment topology.**
+
+**Key conclusion — per-participant is NOT gated on component versions.**
+We are already on the newest IdentityHub/IssuerService. Per-participant
+topology has been achievable since v0.2.0 and remains a pure **umbrella
+Helm-composition** task, not an upstream-version task. The _same_
+`tractusx-identityhub-memory` chart we deploy **once** today (shared
+multi-tenant: one IH hosting 4 ParticipantContexts) would simply be
+instantiated **N times** (one IH per BPN) for per-participant. No newer image
+or chart unlocks this — the only blocker is that the umbrella declares a
+_single_ IH dependency.
+
+**Concrete per-participant work (supersedes the old "Phase D / G2 = follow-up" framing in §4/§5):**
+
+1. **Instantiate the IH chart per participant** — either (a) add
+   `tractusx-identityhub-memory` as an aliased dependency under each
+   participant chart (`tx-data-provider`, `dataconsumerOne`,
+   `dataconsumerTwo`) plus the operator, or (b) give each participant its own
+   Helm release. Approach (a) keeps the single-`helm install` experience.
+2. **One ingress host + DID per IH:** `ih-<role>.tx.test` →
+   `did:web:ih-<role>.tx.test` (no extra path segment). The per-participant
+   profile already declares these four hosts.
+3. **Re-point each connector** `credentialservice` + STS at its _own_ IH
+   service. The dcp schema is already per-participant — only the URLs change
+   from the shared host to the per-role hosts.
+4. **Keep ONE shared IssuerService** (Tractus-X = one issuer per dataspace);
+   all four IHs trust it (we already fixed `trustedIssuers` → issuer-service
+   host this session).
+5. **Seeding:** the post-install hook already loops per participant — point
+   each iteration at its own IH admin endpoint.
+6. **`/etc/hosts` + coredns patch:** add the four `ih-*.tx.test` hosts.
+
+**Practical constraint:** per-participant = **4× IH pods** (+ their probes and
+resource requests). On a single kind/minikube node _that_ is the real cost —
+not component versions. The shared profile stays the default for functional
+testing; per-participant is the "realistic isolation" option.
+
+**Connector version decision:** keep `0.13.0-rc2` for the bundle. It is the
+DCP-native line that matches IH/IS v0.3.2 (EDC 0.16.0) and was validated green
+end-to-end this session (catalog HTTP 200). Downgrading to stable `0.12.1`
+would reintroduce the pre-DCP `iatp:` / `sts.dim:` schema and the STS
+mismatch. The only version follow-up worth tracking is "bump to `0.13.0`
+final when it leaves `-rc`".
+
+---
+
+## 0.1 — 2026-06-19 current standing: TEST CASE 1 PASSES (authoritative)
+
+**This section supersedes the gap analysis (§4 G1–G6), the runtime assumptions
+(§11.4 R1–R3), the Definition of Done (§8), and the connector/IH version facts
+in §0/§0.0/§2.** Everything below was proven on a live `kind` cluster
+(`umbrella-1609`) with the shared-IdentityHub profile and the
+[`hack/dcp-data-transfer-smoke.sh`](../../hack/dcp-data-transfer-smoke.sh)
+stage-aware test.
+
+### Result
+
+**Full DCP data transfer works end-to-end** — `catalog → offer`, `contract
+negotiation → FINALIZED`, `transfer → EDR cached`, `data address resolved`,
+`consumer fetches the provider submodel bytes over DCP` (asserted marker
+present). Validated **twice**, the second time on the **stock**
+`tractusx/edc-controlplane-postgresql-hashicorp-vault:0.13.0-SNAPSHOT` image —
+so **the connector needs ZERO code changes**; the entire solution is
+umbrella-side.
+
+### The validated stack vs. the committed pins (THE central remaining gap)
+
+The working configuration was assembled by patching the running deployments;
+the committed chart pins still lag it:
+
+| Component         | Committed pin (working tree)      | Stack the transfer was validated on            |
+| ----------------- | --------------------------------- | ---------------------------------------------- |
+| `tractusx-connector` | `0.13.0-rc2` (EDC 0.16.0)      | **`0.13.0-SNAPSHOT` (EDC 0.17.0)** main-line image |
+| IdentityHub / IssuerService | `v0.3.2` (EDC 0.16.0)   | **user's local 0.17.0 build** (PR [tractusx-identityhub#308](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/308), kind-loaded, pullPolicy Never) |
+
+The 0.17.0 alignment is **required**, not cosmetic: EDC 0.17.0 / IH #937
+stopped base64url-decoding the `participantContextId` in credential-service URL
+paths. On the 0.16.0 stack the connector's catalog-time credential pull is
+routed to a base64 CS endpoint that the 0.17.0-shaped seed no longer emits → no
+credentials → empty catalog. The seed was ported to **plain** participantContextId
+to match 0.17.0. So the committed `v0.3.2` / `0.13.0-rc2` pins + the plain-ctxId
+seed are **internally inconsistent**: the bundle only does the full transfer on
+the 0.17.0 stack, which is **not yet released**.
+
+### Root cause of the long-standing "empty catalog / failed transfer" — found & fixed (umbrella-side)
+
+The earlier conclusion *"the connector never dispatches the inbound VP pull —
+connector-internal bug"* was **disproven** by instrumenting the connector: the
+pull fires and succeeds. Two of our own configuration defects were the blockers:
+
+1. **Thin credential claims (the essential fix).** The seed issued every
+   credential with `credentialSubject = {id, holderIdentifier}` only. The
+   Catena-X 2025/09 policy functions need type-specific claims:
+   `FrameworkAgreement` does an exact match on `credentialSubject.contractVersion`
+   and `BusinessPartnerNumber` reads a claim whose key ends in `bpn`. Both
+   failed → catalog filtered (and the same constraints in the usage policy would
+   fail negotiation; `UsagePurpose` is a no-op placeholder; `Membership` is
+   presence-only). **Fix (DONE):**
+   [`post-install-identityhub-seed.yaml`](../../charts/tx-data-provider/templates/post-install-identityhub-seed.yaml)
+   now registers a `holder` attestation, builds **per-type** CredentialDefinition
+   mappings (`BpnCredential → credentialSubject.bpn`,
+   `DataExchangeGovernanceCredential → contractVersion`), and sets
+   `properties.contractVersion` at holder registration. Verified in the live VC
+   dump. (Re-package after edits: `helm package charts/tx-data-provider -d charts/umbrella/charts/` — the umbrella renders the `.tgz`, not the source.)
+2. **Empty BDRS directory (transfer layer).** The transfer terminated with
+   `No BPN entry found for agreement` because the in-memory `bdrs-server`
+   directory was empty, so `EventContractNegotiationSubscriber.resolveBpn(did)`
+   returned nothing and `TxDataFlowPropertiesProvider` found no consumer BPN.
+   The umbrella **already** seeds BDRS via
+   [`post-install-bdrs-setup.yaml`](../../charts/umbrella/templates/post-install-bdrs-setup.yaml)
+   (the IH profile sets `bdrs-server-memory.seeding.bpnList` to the four
+   `did:web:identity-hub.tx.test:<BPN>` entries). The directory was empty only
+   because BDRS is in-memory and had restarted ~7× in a long-lived cluster while
+   the hook was `post-install`-only. **Fix (DONE):** added `post-upgrade` to the
+   hook so upgrades re-seed; a fresh install always covered it. Residual,
+   accepted fragility: a BDRS pod restart wipes the in-memory directory until the
+   next install/upgrade.
+
+### Gap & DoD status
+
+| Item | Was | Now |
+| ---- | --- | --- |
+| G1 single source of truth for BPN/DID/keys | HIGH | ✅ `_wallet-derive.tpl` + `wallet.participants`; seed drives everything from it |
+| G2 per-participant topology | MEDIUM | ⬜ still shared-only validated; per-participant profile exists, not E2E-tested (follow-up) |
+| G3 seeding hook E2E-verified | HIGH | ✅ all participants seeded, all credentials `ISSUED`, full transfer green |
+| G4 connector↔IH STS mismatch | HIGH | ✅ STS works (SI-token mint + VP pull both directions, rich claims) |
+| G5 dedicated feature branch | LOW | ✅ on `feature/1609-identityhub-connector-bundle` |
+| G6 user deploy guide | MEDIUM | 🟡 `docs/user/common/guides/data-exchange-identity-hub.md` exists; needs a refresh for the 0.17.0 stack + smoke test |
+| §11.4 R1 DID doc CredentialService entry | runtime-check | ✅ present (plain ctxId) |
+| §11.4 R2 STS wire compatibility | tail risk | ✅ compatible on EDC 0.17.0 |
+| §11.4 R3 issuance completes | runtime-check | ✅ all VCs reach `ISSUED` |
+
+### What's left
+
+1. **Version release dependency (the blocker to a shippable PR).** The working
+   stack needs published artifacts: `tractusx-edc 0.13.0` final (EDC 0.17.0) and
+   an IdentityHub/IssuerService 0.17.0 release (PR #308 merged + released). Until
+   then the committed pins (`0.13.0-rc2` / `v0.3.2`) produce the *non-working*
+   0.16.0 bundle. Bump the pins in
+   [`charts/dataspace-connector-bundle/Chart.yaml`](../../charts/dataspace-connector-bundle/Chart.yaml)
+   and [`charts/identity-and-trust-bundle/Chart.yaml`](../../charts/identity-and-trust-bundle/Chart.yaml)
+   once available, then re-validate with images pulled (not kubectl-patched).
+2. **Clean fresh-install proof.** All pieces are validated independently and via
+   a wallet-layer re-seed; a single `helm uninstall`/`install` on the 0.17.0
+   stack should be run to prove green from scratch (currently the cluster is a
+   patched/re-seeded state, not a clean release).
+3. **Per-participant topology (G2).** Wire + E2E-test the per-participant profile
+   (4 IH pods) — §0.0 has the steps. Follow-up, not a 26.06 blocker.
+4. **Docs refresh (G6).** Update the deploy guide for the 0.17.0 stack and point
+   at the smoke test as the Test-Case-1 evidence.
+5. **Commit hygiene.** Working tree has the seed enrichment + repackaged
+   `tx-data-provider-0.5.0.tgz` + BDRS hook + persistence/seed-port fixes +
+   `hack/dcp-data-transfer-smoke.sh`, all uncommitted. Commit when ready
+   (single-author; never commit `CLAUDE.md` or this plan). Revert any live
+   deployments still on the `:debug-vppull` image (already reverted to stock).
+6. **Optional robustness.** BDRS in-memory restart fragility (see fix #2) — a
+   persistent BDRS variant or a self-healing re-seed would harden it.
 
 ---
 
@@ -14,9 +194,9 @@
 `tractusx-issuerservice`, or `tractusx-edc`. Everything needed is already
 shipped in:
 
-- `tractusx-identityhub-memory` **v0.2.0** (2026-03-10)
-- `tractusx-issuerservice-memory` **v0.2.0** (2026-03-10)
-- `tractusx-connector` **0.11.2** (umbrella's current pin)
+- `tractusx-identityhub-memory` **v0.3.2** (2026-06-16) — _was v0.2.0 when this plan was drafted; see §0.0_
+- `tractusx-issuerservice` (postgres) **v0.3.2**
+- `tractusx-connector` **0.13.0-rc2** (DCP-native, EDC 0.16.0-aligned) — _was 0.11.2 when this plan was drafted_
 
 What we do need to change lives entirely in **this repo** (umbrella). The
 scope boils down to: new Helm value wiring + a post-install seeding Job that
@@ -24,7 +204,7 @@ walks the 10-step DCP API sequence documented upstream at
 [`tractusx-identityhub/docs/usage/dcp-api-walkthrough/`](https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/docs/usage/dcp-api-walkthrough).
 
 Caveat — **there are three runtime assumptions we must verify on a live
-cluster before opening the PR** (§11 *Validation*). If any of them fail, the
+cluster before opening the PR** (§11 _Validation_). If any of them fail, the
 fix is still umbrella-local (values / hook adjustments), except for one
 tail risk called out explicitly.
 
@@ -37,7 +217,7 @@ Verbatim benefits from the issue:
 1. **Ready-to-deploy chart in a decentralized manner.**
 2. **Synchronize the initial configuration between Identity Hub and Connector.**
 
-**Test Case 1:** *"Attempt a data-exchange, using the umbrella as a reference."*
+**Test Case 1:** _"Attempt a data-exchange, using the umbrella as a reference."_
 
 ### Interpretation (what "bundle" means here)
 
@@ -45,29 +225,33 @@ The word "bundle" is deliberately loose in the issue. Reading it against the
 umbrella's existing patterns and the upstream repos, the feature splits into
 three concrete deliverables:
 
-| # | Deliverable | Where it lives |
-|---|---|---|
-| D1 | A Helm composition that stands up Identity Hub + Issuer Service + a `tractusx-connector` wired to them, with one source of truth for BPN/DID/keys. | `charts/identity-and-trust-bundle` + `charts/tx-data-provider` in this repo. |
-| D2 | An umbrella profile (`values-test-data-exchange-identity-hub.yaml`) that swaps the SSI DIM Wallet Stub for the bundle and still passes the existing data-exchange adopter journey. | `charts/values-test-data-exchange-identity-hub.yaml`. |
-| D3 | Local deploy + E2E data-exchange validation on minikube (or Docker Desktop) — matching Test Case 1. | New `docs/user/common/guides/data-exchange-identity-hub.md`. |
+| #   | Deliverable                                                                                                                                                                        | Where it lives                                                               |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| D1  | A Helm composition that stands up Identity Hub + Issuer Service + a `tractusx-connector` wired to them, with one source of truth for BPN/DID/keys.                                 | `charts/identity-and-trust-bundle` + `charts/tx-data-provider` in this repo. |
+| D2  | An umbrella profile (`values-test-data-exchange-identity-hub.yaml`) that swaps the SSI DIM Wallet Stub for the bundle and still passes the existing data-exchange adopter journey. | `charts/values-test-data-exchange-identity-hub.yaml`.                        |
+| D3  | Local deploy + E2E data-exchange validation on minikube (or Docker Desktop) — matching Test Case 1.                                                                                | New `docs/user/common/guides/data-exchange-identity-hub.md`.                 |
 
-D1 is the *plumbing*, D2 is the *ready-to-deploy experience*, D3 is the *test
-case evidence*. A PR that closes #1609 needs all three.
+D1 is the _plumbing_, D2 is the _ready-to-deploy experience_, D3 is the _test
+case evidence_. A PR that closes #1609 needs all three.
 
 ---
 
-## 2. Upstream state (verified 2026-04-18)
+## 2. Upstream state (verified 2026-04-18; **refreshed 2026-06-18 — see §0.0**)
 
-| Artifact | Version | Notes |
-|---|---|---|
-| `tractusx-identityhub` | `v0.2.0` (2026-03-10) | 4 chart variants: full + `-memory`, same for Issuer Service. |
-| `tractusx-identityhub-memory` | `v0.2.0` | No external Vault/PostgreSQL; matches the umbrella's in-memory test posture. |
-| `tractusx-issuerservice-memory` | `v0.2.0` | Admin API `/api/admin`, Issuance API `/api/issuance`. |
-| `tractusx-connector` | `0.11.2` (umbrella pin) | Schema still uses `iatp:` / `sts.dim:`. |
-| `tractusx-connector` | `0.12.0` | Still `iatp:` / `sts.dim:`. |
-| `tractusx-connector` | `0.13.0-rc1` | **DCP rename applied:** `dcp:` / `sts.div:` + `didService.selfRegistration` + VP cache. |
-| `ssi-dim-wallet-stub` | `0.1.14` (umbrella pin) | Stays as the **default** wallet. |
-| Upstream PRs referencing #1609 | **none** in `tractus-x-umbrella`, `tractusx-identityhub`, `tractusx-edc` | We are the first movers. |
+> The table below is the **original 2026-04-18** snapshot, kept for history.
+> The current pins advanced to IH/IS **v0.3.2** and connector **0.13.0-rc2**
+> (EDC 0.16.0). See §0.0 for the up-to-date version matrix.
+
+| Artifact                        | Version                                                                  | Notes                                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `tractusx-identityhub`          | `v0.2.0` (2026-03-10)                                                    | 4 chart variants: full + `-memory`, same for Issuer Service.                            |
+| `tractusx-identityhub-memory`   | `v0.2.0`                                                                 | No external Vault/PostgreSQL; matches the umbrella's in-memory test posture.            |
+| `tractusx-issuerservice-memory` | `v0.2.0`                                                                 | Admin API `/api/admin`, Issuance API `/api/issuance`.                                   |
+| `tractusx-connector`            | `0.11.2` (umbrella pin)                                                  | Schema still uses `iatp:` / `sts.dim:`.                                                 |
+| `tractusx-connector`            | `0.12.0`                                                                 | Still `iatp:` / `sts.dim:`.                                                             |
+| `tractusx-connector`            | `0.13.0-rc1`                                                             | **DCP rename applied:** `dcp:` / `sts.div:` + `didService.selfRegistration` + VP cache. |
+| `ssi-dim-wallet-stub`           | `0.1.14` (umbrella pin)                                                  | Stays as the **default** wallet.                                                        |
+| Upstream PRs referencing #1609  | **none** in `tractus-x-umbrella`, `tractusx-identityhub`, `tractusx-edc` | We are the first movers.                                                                |
 
 ### Schema-rename consequence
 
@@ -77,8 +261,8 @@ Identity Hub v0.2.0 is natively DCP-shaped. The umbrella's current connector
 - **Short path (pick this):** keep `tractusx-connector` at `0.11.2` and use
   its `iatp:` / `sts.dim:` keys pointing at IH endpoints. IH doesn't care
   what the connector's Helm values schema looks like — it only sees HTTP
-  calls on `/api/sts`, `/api/credentials`, and `/api/identity`. *This is
-  what's already scaffolded in the current branch.*
+  calls on `/api/sts`, `/api/credentials`, and `/api/identity`. _This is
+  what's already scaffolded in the current branch._
 - **Long path (follow-up):** bump to `tractusx-connector 0.13.0+` when it
   stabilises out of `rc`, rename all `iatp` → `dcp` and `sts.dim` → `sts.div`
   in the umbrella, and enable `didService.selfRegistration`. Track as a
@@ -88,12 +272,12 @@ Identity Hub v0.2.0 is natively DCP-shaped. The umbrella's current connector
 
 ## 3. What is already in place on this branch
 
-Branch: `feature/BE-165-umbrella-chart-documentation` (will be re-scoped — see §7).
+Branch: `feature/1609-identityhub-connector-bundle` (re-scoped from the original `feature/BE-165-umbrella-chart-documentation` — see §7).
 
 Applied and `helm lint`/`helm template`-verified:
 
 - [x] `wallet:` indirection block at the umbrella level — `stub` | `identityHub`. [charts/umbrella/values.yaml](charts/umbrella/values.yaml)
-- [x] Mutual-exclusion validator that fails helm render if both wallets enabled. [charts/umbrella/templates/_wallet-validate.tpl](charts/umbrella/templates/_wallet-validate.tpl), [charts/umbrella/templates/configmap-wallet-mode.yaml](charts/umbrella/templates/configmap-wallet-mode.yaml)
+- [x] Mutual-exclusion validator that fails helm render if both wallets enabled. [charts/umbrella/templates/\_wallet-validate.tpl](charts/umbrella/templates/_wallet-validate.tpl), [charts/umbrella/templates/configmap-wallet-mode.yaml](charts/umbrella/templates/configmap-wallet-mode.yaml)
 - [x] `tractusx-identityhub-memory v0.2.0` + `tractusx-issuerservice-memory v0.2.0` pinned as optional deps of `identity-and-trust-bundle`. [charts/identity-and-trust-bundle/Chart.yaml](charts/identity-and-trust-bundle/Chart.yaml)
 - [x] Default values for both charts that match real v0.2.0 schema (endpoints 8080–8087, two ingresses per IH for presentation + admin planes). [charts/identity-and-trust-bundle/values.yaml](charts/identity-and-trust-bundle/values.yaml)
 - [x] Shared-topology profile file. [charts/values-test-data-exchange-identity-hub.yaml](charts/values-test-data-exchange-identity-hub.yaml)
@@ -120,14 +304,14 @@ helm template umb charts/umbrella --set identity-and-trust-bundle.identity-hub.e
 
 ## 4. Honest gaps vs. issue scope
 
-| Gap | Why it blocks closing #1609 | Severity |
-|---|---|---|
-| **G1. No single source of truth for per-participant BPN/DID/keys.** Currently BPN is declared in `tractusx-connector.iatp.id` AND (separately) in `identity-hub.identityhub.iatp.sts.oauth.client.id`. Operators can desync. | Directly contradicts benefit #2 ("synchronize the initial configuration"). | **HIGH** |
-| **G2. Per-participant topology only documented, not wired.** `tx-data-provider`/`dataconsumerOne`/`dataconsumerTwo` have no IH sub-dep; the per-participant profile currently can't deploy. | The word "decentralized" in benefit #1 implies each participant runs its own IH. | **MEDIUM** — shared mode covers the test-case. |
-| **G3. Seeding hook not E2E-verified.** Payload schemas (`/v1alpha/participants`, `/v1alpha/credentials`) are from v0.2.0 docs but no actual install has completed. | Test Case 1 can't pass without this. | **HIGH** |
-| **G4. Connector–Hub STS protocol mismatch.** IH's STS is DCP-native (not OAuth2); `tractusx-connector 0.11.2`'s `sts.dim.oauth.token_url` expects OAuth2. May fail at runtime. | Test Case 1 may fail even after seeding. | **HIGH (unknown until E2E)** |
-| **G5. Branch is scoped to docs.** Current branch name & previous commits imply doc-only. | A PR referencing #1609 should live on a dedicated feature branch. | LOW |
-| **G6. No user-facing deploy guide.** `docs/user/common/guides/*` has no "run the umbrella with Identity Hub" walkthrough. | Issue expects ready-to-deploy experience. | MEDIUM |
+| Gap                                                                                                                                                                                                                                                                                                                                                   | Why it blocks closing #1609                                                      | Severity                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **G1. No single source of truth for per-participant BPN/DID/keys.** Currently BPN is declared in `tractusx-connector.iatp.id` AND (separately) in `identity-hub.identityhub.iatp.sts.oauth.client.id`. Operators can desync.                                                                                                                          | Directly contradicts benefit #2 ("synchronize the initial configuration").       | **HIGH**                                       |
+| **G2. Per-participant topology only documented, not wired.** `tx-data-provider`/`dataconsumerOne`/`dataconsumerTwo` have no IH sub-dep; the per-participant profile currently can't deploy. **This is an umbrella Helm-composition task, not a component-version one** — see §0.0 for the concrete wiring steps (we are already on the newest IH/IS). | The word "decentralized" in benefit #1 implies each participant runs its own IH. | **MEDIUM** — shared mode covers the test-case. |
+| **G3. Seeding hook not E2E-verified.** Payload schemas (`/v1alpha/participants`, `/v1alpha/credentials`) are from v0.2.0 docs but no actual install has completed.                                                                                                                                                                                    | Test Case 1 can't pass without this.                                             | **HIGH**                                       |
+| **G4. Connector–Hub STS protocol mismatch.** IH's STS is DCP-native (not OAuth2); `tractusx-connector 0.11.2`'s `sts.dim.oauth.token_url` expects OAuth2. May fail at runtime.                                                                                                                                                                        | Test Case 1 may fail even after seeding.                                         | **HIGH (unknown until E2E)**                   |
+| **G5. Branch is scoped to docs.** Current branch name & previous commits imply doc-only.                                                                                                                                                                                                                                                              | A PR referencing #1609 should live on a dedicated feature branch.                | LOW                                            |
+| **G6. No user-facing deploy guide.** `docs/user/common/guides/*` has no "run the umbrella with Identity Hub" walkthrough.                                                                                                                                                                                                                             | Issue expects ready-to-deploy experience.                                        | MEDIUM                                         |
 
 ---
 
@@ -157,7 +341,7 @@ connector config and IH ParticipantContext derive from that one place.
          bpn: "BPNL00000003AVTH"
          role: consumer
      identityHub:
-       topology: shared        # shared | perParticipant
+       topology: shared # shared | perParticipant
        sharedHost: "identity-hub.tx.test"
        didScheme: "did:web"
        didwebHttps: false
@@ -203,12 +387,17 @@ Create `docs/user/common/guides/data-exchange-identity-hub.md`:
 - Pointer to Test Case 1 (existing `data-exchange.md`).
 - Known-limitations section citing G2 (no per-participant wiring yet) and the connector-version constraint.
 
-### Phase D — Close G2 (per-participant topology) **[follow-up PR]**
+### Phase D — Close G2 (per-participant topology)
 
-Out of scope for the first PR on #1609. Document as a tracked follow-up
-issue in this plan. The per-participant profile file stays in-repo as a
-target, with an explicit header comment saying "requires follow-up chart
-wiring before it can deploy" (already there).
+**2026-06-18 update:** re-scoped from "document only" to an actionable task —
+see **§0.0** for the verified finding (no component upgrade required; this is
+pure umbrella Helm composition) and the concrete 6-step wiring approach. The
+per-participant profile
+[charts/values-test-data-exchange-identity-hub-per-participant.yaml](charts/values-test-data-exchange-identity-hub-per-participant.yaml)
+stays in-repo as the target end-state; its header comment already documents
+the required dependency wiring. Whether it ships in the first #1609 PR or a
+follow-up is a sequencing call (§9 open question 2), **not** a technical
+blocker.
 
 ### Phase E — Close G5 (branch + PR hygiene) **[30 min]**
 
@@ -307,6 +496,7 @@ Follow existing guide: [docs/user/common/guides/data-exchange.md](docs/user/comm
 ```
 
 If contract negotiation fails with `IATP auth failed` or similar:
+
 - Dump controlplane env: `kubectl -n umbrella exec deploy/umbrella-dataconsumerone-controlplane -- env | grep -i iatp`
 - Check that `EDC_IAM_IATP_CREDENTIALSERVICE_URL` is the IH presentation URL, not the stub.
 - Consult Phase B §4 (STS mismatch fallback).
@@ -323,13 +513,13 @@ minikube stop
 
 ## 7. Risks
 
-| # | Risk | Mitigation |
-|---|---|---|
-| R1 | IH Identity API payload schema drifted between v0.2.0 and what the docs show. | Seeding hook logs HTTP status + body and continues on unknown status; operator inspects after install. |
-| R2 | `tractusx-connector 0.11.2` can't obtain SI tokens from IH's STS because the connector expects OAuth2. | Phase B §4 — embedded STS fallback documented in the profile. |
-| R3 | `tractusx-connector 0.13.0` stabilises during 26.06 and the community prefers the DCP-renamed bundle. | Keep `iatp`/`dcp` schema decoupling tight (profile comments), open a follow-up issue for the 0.13 bump. |
-| R4 | Minikube resource pressure on a 16 GB laptop (we requested 10 GB). | Umbrella `values-test-data-exchange.yaml` disables observability stack; profile inherits this. |
-| R5 | IngressDNS entries drift across macOS / Linux / Windows. | §6.1 keeps `/etc/hosts` as the source of truth; ingress-dns is optional. |
+| #   | Risk                                                                                                   | Mitigation                                                                                              |
+| --- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| R1  | IH Identity API payload schema drifted between v0.2.0 and what the docs show.                          | Seeding hook logs HTTP status + body and continues on unknown status; operator inspects after install.  |
+| R2  | `tractusx-connector 0.11.2` can't obtain SI tokens from IH's STS because the connector expects OAuth2. | Phase B §4 — embedded STS fallback documented in the profile.                                           |
+| R3  | `tractusx-connector 0.13.0` stabilises during 26.06 and the community prefers the DCP-renamed bundle.  | Keep `iatp`/`dcp` schema decoupling tight (profile comments), open a follow-up issue for the 0.13 bump. |
+| R4  | Minikube resource pressure on a 16 GB laptop (we requested 10 GB).                                     | Umbrella `values-test-data-exchange.yaml` disables observability stack; profile inherits this.          |
+| R5  | IngressDNS entries drift across macOS / Linux / Windows.                                               | §6.1 keeps `/etc/hosts` as the source of truth; ingress-dns is optional.                                |
 
 ---
 
@@ -399,18 +589,18 @@ change to any upstream repo.**
 
 ### 11.1 Can this be done without touching IH/IS/connector code? — Yes.
 
-| Surface our bundle depends on | Ships in | Status |
-|---|---|---|
-| `POST /api/identity/v1alpha/participants` (create ParticipantContext) | IH v0.2.0 + IS v0.2.0 | ✅ Present |
-| `PUT /api/identity/v1alpha/participants/{id}/state?isActive=true` | IH + IS v0.2.0 | ✅ Present |
-| `GET /.well-known/did.json` served by IH's DID endpoint (port 8083) | IH v0.2.0 | ✅ Present |
-| `POST /api/admin/v1alpha/participants/{id}/attestations` | IS v0.2.0 | ✅ Present |
-| `POST /api/admin/v1alpha/participants/{id}/credentialdefinitions` | IS v0.2.0 | ✅ Present |
-| `POST /api/admin/v1alpha/participants/{id}/holders` | IS v0.2.0 | ✅ Present |
-| `POST /api/identity/v1alpha/participants/{id}/credentials/request` (DCP trigger) | IH v0.2.0 | ✅ Present |
-| `POST /api/sts` (OAuth2 token + SI-token mint) | IH v0.2.0 | ✅ Present |
-| Connector-side `iatp.sts.oauth` wiring | Connector 0.11.2 | ✅ Present |
-| Connector-side CS-URL resolution via DID doc `service[]` | Connector 0.11.2 DCP runtime extension | ⚠️ Runtime-check (see §11.4.R2) |
+| Surface our bundle depends on                                                    | Ships in                               | Status                          |
+| -------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------- |
+| `POST /api/identity/v1alpha/participants` (create ParticipantContext)            | IH v0.2.0 + IS v0.2.0                  | ✅ Present                      |
+| `PUT /api/identity/v1alpha/participants/{id}/state?isActive=true`                | IH + IS v0.2.0                         | ✅ Present                      |
+| `GET /.well-known/did.json` served by IH's DID endpoint (port 8083)              | IH v0.2.0                              | ✅ Present                      |
+| `POST /api/admin/v1alpha/participants/{id}/attestations`                         | IS v0.2.0                              | ✅ Present                      |
+| `POST /api/admin/v1alpha/participants/{id}/credentialdefinitions`                | IS v0.2.0                              | ✅ Present                      |
+| `POST /api/admin/v1alpha/participants/{id}/holders`                              | IS v0.2.0                              | ✅ Present                      |
+| `POST /api/identity/v1alpha/participants/{id}/credentials/request` (DCP trigger) | IH v0.2.0                              | ✅ Present                      |
+| `POST /api/sts` (OAuth2 token + SI-token mint)                                   | IH v0.2.0                              | ✅ Present                      |
+| Connector-side `iatp.sts.oauth` wiring                                           | Connector 0.11.2                       | ✅ Present                      |
+| Connector-side CS-URL resolution via DID doc `service[]`                         | Connector 0.11.2 DCP runtime extension | ⚠️ Runtime-check (see §11.4.R2) |
 
 **Bottom line for the user's question:** everything listed above is already
 released. The work is 100% configuration + orchestration inside the umbrella.
@@ -421,18 +611,18 @@ The upstream DCP walkthrough specifies a **10-step** bootstrap flow. Our
 current hook implements only 2 of those steps, and two of them are wrong.
 The table below is authoritative for the rewrite.
 
-| # | Step (upstream name) | Endpoint & verb | Where | Current hook state |
-|---|---|---|---|---|
-| 1 | Create Issuer Participant | `POST {IS}/api/identity/v1alpha/participants` | Issuer | ❌ Missing |
-| 2 | Create Holder Participant | `POST {IH}/api/identity/v1alpha/participants` | Holder | ⚠️ Has POST but wrong body (see §11.3) |
-| 3 | Activate Participant Contexts | `PUT {…}/api/identity/v1alpha/participants/{id}/state?isActive=true` | Both | ❌ Missing |
-| 4 | Verify DID Documents | `GET {…}/.well-known/did.json` (+ per-participant path) | Both | ⚠️ Poll exists but does not verify `service[]` entry |
-| 5 | Create Attestation | `POST {IS}/api/admin/v1alpha/participants/{id}/attestations` | Issuer | ❌ Missing |
-| 6 | Create Credential Definition | `POST {IS}/api/admin/v1alpha/participants/{id}/credentialdefinitions` | Issuer | ❌ Missing |
-| 7 | Register Holder at Issuer | `POST {IS}/api/admin/v1alpha/participants/{id}/holders` | Issuer | ❌ Missing |
-| 8 | Request Credentials (DCP) | `POST {IH}/api/identity/v1alpha/participants/{id}/credentials/request` | Holder | ❌ **Wrong path used today** — hook POSTs `/api/admin/v1alpha/credentials` which does not exist in IH v0.2.0 |
-| 9 | Retrieve Credentials | `GET {IH}/api/identity/v1alpha/participants/{id}/credentials` | Holder | ❌ Missing (needed for idempotent re-run + Test Case 1 gating) |
-| 10 | Verify Credential | client-side | — | N/A |
+| #   | Step (upstream name)          | Endpoint & verb                                                        | Where  | Current hook state                                                                                           |
+| --- | ----------------------------- | ---------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------ |
+| 1   | Create Issuer Participant     | `POST {IS}/api/identity/v1alpha/participants`                          | Issuer | ❌ Missing                                                                                                   |
+| 2   | Create Holder Participant     | `POST {IH}/api/identity/v1alpha/participants`                          | Holder | ⚠️ Has POST but wrong body (see §11.3)                                                                       |
+| 3   | Activate Participant Contexts | `PUT {…}/api/identity/v1alpha/participants/{id}/state?isActive=true`   | Both   | ❌ Missing                                                                                                   |
+| 4   | Verify DID Documents          | `GET {…}/.well-known/did.json` (+ per-participant path)                | Both   | ⚠️ Poll exists but does not verify `service[]` entry                                                         |
+| 5   | Create Attestation            | `POST {IS}/api/admin/v1alpha/participants/{id}/attestations`           | Issuer | ❌ Missing                                                                                                   |
+| 6   | Create Credential Definition  | `POST {IS}/api/admin/v1alpha/participants/{id}/credentialdefinitions`  | Issuer | ❌ Missing                                                                                                   |
+| 7   | Register Holder at Issuer     | `POST {IS}/api/admin/v1alpha/participants/{id}/holders`                | Issuer | ❌ Missing                                                                                                   |
+| 8   | Request Credentials (DCP)     | `POST {IH}/api/identity/v1alpha/participants/{id}/credentials/request` | Holder | ❌ **Wrong path used today** — hook POSTs `/api/admin/v1alpha/credentials` which does not exist in IH v0.2.0 |
+| 9   | Retrieve Credentials          | `GET {IH}/api/identity/v1alpha/participants/{id}/credentials`          | Holder | ❌ Missing (needed for idempotent re-run + Test Case 1 gating)                                               |
+| 10  | Verify Credential             | client-side                                                            | —      | N/A                                                                                                          |
 
 ### 11.3 Authentication: `x-api-key` is **runtime-generated**, not our constant
 
@@ -490,11 +680,11 @@ rules:
 
 ### 11.4 Runtime assumptions to verify on first live install
 
-| # | Assumption | Impact if false | Umbrella-local fix available? |
-|---|---|---|---|
-| R1 | IH v0.2.0 emits a DID document at `/{participantId}/did.json` containing a `service[]` entry with `type: "CredentialService"` whose `serviceEndpoint` points back to IH's `/api/credentials/v1/participants/{ctxId}`. | Connector (verifier) can't discover holder's CS → DCP presentation fails → Test Case 1 fails. | **Yes** — the `serviceEndpoints[]` array is supplied *by the caller* in the `POST /participants` body (confirmed in walkthrough step 2). Our hook must include it. |
-| R2 | Connector 0.11.2's `iatp.sts.oauth` flow (OAuth2 client-credentials against `token_url`) is wire-compatible with IH's `/api/sts` token endpoint. | Connector cannot mint SI tokens → protocol never gets past authentication. | **Probably yes** via `iatp.sts.oauth.token_url: http://identity-hub…/api/sts/token` + `iatp.sts.dim.url: http://identity-hub…/api/sts`. **Tail risk:** if connector 0.11.2 hard-codes a DIM-specific request body that IH's STS rejects, we must either bump to connector 0.13.0-rc1 (DCP-native) **or** enable the connector's embedded STS and use IH only as CS+VC-holder. Both options are umbrella-local values changes; no upstream code change. |
-| R3 | IS v0.2.0's issuance flow, once attestation + credentialdefinition + holder are registered, responds synchronously to `POST /participants/{id}/credentials/request` and delivers the VC into IH's store within a few seconds. | Seeding Job times out; subsequent `GET /credentials` returns empty → Test Case 1 can't start. | **Yes** — Job polls step 9 with exponential backoff; IS emits issuance-process state via `GET {IS}/api/admin/v1alpha/participants/{id}/issuanceprocesses/query`; we can use that endpoint for observability. |
+| #   | Assumption                                                                                                                                                                                                                    | Impact if false                                                                               | Umbrella-local fix available?                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| R1  | IH v0.2.0 emits a DID document at `/{participantId}/did.json` containing a `service[]` entry with `type: "CredentialService"` whose `serviceEndpoint` points back to IH's `/api/credentials/v1/participants/{ctxId}`.         | Connector (verifier) can't discover holder's CS → DCP presentation fails → Test Case 1 fails. | **Yes** — the `serviceEndpoints[]` array is supplied _by the caller_ in the `POST /participants` body (confirmed in walkthrough step 2). Our hook must include it.                                                                                                                                                                                                                                                                                     |
+| R2  | Connector 0.11.2's `iatp.sts.oauth` flow (OAuth2 client-credentials against `token_url`) is wire-compatible with IH's `/api/sts` token endpoint.                                                                              | Connector cannot mint SI tokens → protocol never gets past authentication.                    | **Probably yes** via `iatp.sts.oauth.token_url: http://identity-hub…/api/sts/token` + `iatp.sts.dim.url: http://identity-hub…/api/sts`. **Tail risk:** if connector 0.11.2 hard-codes a DIM-specific request body that IH's STS rejects, we must either bump to connector 0.13.0-rc1 (DCP-native) **or** enable the connector's embedded STS and use IH only as CS+VC-holder. Both options are umbrella-local values changes; no upstream code change. |
+| R3  | IS v0.2.0's issuance flow, once attestation + credentialdefinition + holder are registered, responds synchronously to `POST /participants/{id}/credentials/request` and delivers the VC into IH's store within a few seconds. | Seeding Job times out; subsequent `GET /credentials` returns empty → Test Case 1 can't start. | **Yes** — Job polls step 9 with exponential backoff; IS emits issuance-process state via `GET {IS}/api/admin/v1alpha/participants/{id}/issuanceprocesses/query`; we can use that endpoint for observability.                                                                                                                                                                                                                                           |
 
 ### 11.5 Port numbers — the chart and the walkthrough disagree
 
@@ -577,15 +767,15 @@ in Phase B before we commit to a PR strategy.
 The sig-release repo tracks phase issues but the bodies are empty
 (auto-created). The dates visible in the milestone view are:
 
-| Phase | Target window | Our relevance |
-|---|---|---|
-| Refinement Phase (#1373) | Now → **Draft Feature Freeze** | Land §5 Phase A (config sync), get #1609 PR in draft. |
-| Draft Feature Freeze (#1374) | mid-May 2026 | #1609 PR must be open and referenced. |
-| Alignment Day (#1375) | late May 2026 | Present local-deploy evidence (Test Case 1 pass) to committers. |
-| FOSS - Feature Freeze (#1381) | early June 2026 | All umbrella wiring + seeding Job rewrite must be merged. |
-| FOSS - Int Deployment (#1382) | early June 2026 | Umbrella main branch must render + install cleanly with both wallet modes. |
-| FOSS - Kick-off Testing (#1383) / Testing Phase (#1384) | early-to-mid June 2026 | Fix any E2E regressions surfaced against stable EDC 0.11 → 0.12 bump. |
-| Release Closing (#1388) → Publish (#1390) | 17 June 2026 | Bundle profile documented as "preview" if #1610 (portal) slips. |
+| Phase                                                   | Target window                  | Our relevance                                                              |
+| ------------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------- |
+| Refinement Phase (#1373)                                | Now → **Draft Feature Freeze** | Land §5 Phase A (config sync), get #1609 PR in draft.                      |
+| Draft Feature Freeze (#1374)                            | mid-May 2026                   | #1609 PR must be open and referenced.                                      |
+| Alignment Day (#1375)                                   | late May 2026                  | Present local-deploy evidence (Test Case 1 pass) to committers.            |
+| FOSS - Feature Freeze (#1381)                           | early June 2026                | All umbrella wiring + seeding Job rewrite must be merged.                  |
+| FOSS - Int Deployment (#1382)                           | early June 2026                | Umbrella main branch must render + install cleanly with both wallet modes. |
+| FOSS - Kick-off Testing (#1383) / Testing Phase (#1384) | early-to-mid June 2026         | Fix any E2E regressions surfaced against stable EDC 0.11 → 0.12 bump.      |
+| Release Closing (#1388) → Publish (#1390)               | 17 June 2026                   | Bundle profile documented as "preview" if #1610 (portal) slips.            |
 
 Concrete deadline for us: **#1609 PR merged before FOSS Feature Freeze (#1381)**, roughly ~6 weeks from today.
 
@@ -593,12 +783,12 @@ Concrete deadline for us: **#1609 PR merged before FOSS Feature Freeze (#1381)**
 
 Only 4 of the 26 feature issues in 26.06 matter for #1609:
 
-| Issue | Title (abbrev.) | Dependency direction | Committers |
-|---|---|---|---|
-| **#1609** | [Identity Hub][Connector] Create a bundle for IdentityHub and Connector | **this plan** | @matbmoser, @CDiezRodriguez, @mgarciaLKS, @AYaoZhan |
-| **#1610** | Upgrade the Portal with SSI IssuerService to support the Identity Hub | **#1609 enables #1610.** Portal backend replaces `ssi-credential-issuer` with IssuerService calls; our umbrella bundle is what the Portal CI will deploy against. | @matbmoser, @mgarciaLKS, @CDiezRodriguez, @AYaoZhan, @saudkhan116 |
-| **#1474** | [Identity Hub] Develop frontend for Identity Hub | Consumes our IH deployment; no coupling to umbrella wiring. | @matbmoser, @mgarciaLKS, @pjuaristi-ikerlan |
-| **#1612** | IRS — Implement support of EDC 0.11 and above | **Independent of #1609** but confirms EDC 0.11 is the 26.06 connector baseline. Reinforces our decision to pin connector `0.11.2` in this bundle. | @max-wies-cofinity, @stephanbcbauer |
+| Issue     | Title (abbrev.)                                                         | Dependency direction                                                                                                                                              | Committers                                                        |
+| --------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **#1609** | [Identity Hub][Connector] Create a bundle for IdentityHub and Connector | **this plan**                                                                                                                                                     | @matbmoser, @CDiezRodriguez, @mgarciaLKS, @AYaoZhan               |
+| **#1610** | Upgrade the Portal with SSI IssuerService to support the Identity Hub   | **#1609 enables #1610.** Portal backend replaces `ssi-credential-issuer` with IssuerService calls; our umbrella bundle is what the Portal CI will deploy against. | @matbmoser, @mgarciaLKS, @CDiezRodriguez, @AYaoZhan, @saudkhan116 |
+| **#1474** | [Identity Hub] Develop frontend for Identity Hub                        | Consumes our IH deployment; no coupling to umbrella wiring.                                                                                                       | @matbmoser, @mgarciaLKS, @pjuaristi-ikerlan                       |
+| **#1612** | IRS — Implement support of EDC 0.11 and above                           | **Independent of #1609** but confirms EDC 0.11 is the 26.06 connector baseline. Reinforces our decision to pin connector `0.11.2` in this bundle.                 | @max-wies-cofinity, @stephanbcbauer                               |
 
 Issues that don't touch #1609 but share the "wallet ecosystem" theme (informational only): #1475 (PCF/DPP attestation VC PoC), #1477 (multi-dataspace credentials), #1564 (policy JSON Schema validation — connector-side), #1611 (TCK automation in umbrella — same committers).
 
