@@ -126,7 +126,11 @@ spec:
               IS_ISSUANCE=$(cat /etc/wallet/issuer-service-internal-issuance-api)
               ISSUER_DID=$(cat /etc/wallet/issuer-did)
               ISSUER_PID=$(cat /etc/wallet/issuer-participant-id)
-              ISSUER_PID_B64=$(cat /etc/wallet/issuer-participant-id-b64)
+              # EDC/IdentityHub 0.17.0 (IH #937) removed base64url-decoding of the
+              # participantContextId path segment from the Identity/IssuerAdmin/Storage
+              # APIs — URL paths now use the PLAIN id. Keep the var name (used in all
+              # downstream path interpolations) but assign the plain id.
+              ISSUER_PID_B64="$ISSUER_PID"
 
               echo "[ih-seed] identity-hub identity API     = $IH_IDENTITY"
               echo "[ih-seed] identity-hub credentials API  = $IH_CREDENTIALS"
@@ -186,8 +190,26 @@ spec:
                 printf '%s' "$key"
               }
 
+              # --- per-IH super-user key cache (per-participant topology
+              # provisions holders across one IdentityHub per participant;
+              # memoize each IH's key by its pod-label selector so the log
+              # scrape runs at most once per IH) ---
+              _key_cache_path() { printf '/tmp/ihkey_%s' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_')"; }
+              seed_key_cache() { printf '%s' "$2" > "$(_key_cache_path "$1")"; }
+              key_for_label() {
+                local label="$1" cache
+                cache="$(_key_cache_path "$label")"
+                if [ -s "$cache" ]; then cat "$cache"; return 0; fi
+                local k; k=$(extract_api_key "$label")
+                printf '%s' "$k" > "$cache"
+                printf '%s' "$k"
+              }
+
               IH_KEY=$(extract_api_key "$IH_POD_LABEL")
               IS_KEY=$(extract_api_key "$IS_POD_LABEL")
+              # Pre-seed the cache so the per-participant loop reuses the
+              # default / operator IH key without a second log scrape.
+              seed_key_cache "$IH_POD_LABEL" "$IH_KEY"
               echo "[ih-seed] IH super-user key  = ${IH_KEY:0:8}..."
               echo "[ih-seed] IS super-user key  = ${IS_KEY:0:8}..."
 
@@ -215,6 +237,24 @@ spec:
               }
               wait_api "$IH_IDENTITY" "$IH_KEY" "IH identity API"
               wait_api "$IS_IDENTITY" "$IS_KEY" "IS identity API"
+
+              # Memoized readiness for an arbitrary IdentityHub (per-participant
+              # topology provisions holders across several IHs). Waits for the
+              # IH pod (selected by label) to be Ready, caches its super-user
+              # key, and blocks until its Identity API answers. No-op on repeat.
+              prepare_ih() {
+                local label="$1" url="$2" marker
+                marker="/tmp/ihready_$(printf '%s' "$label" | tr -c 'A-Za-z0-9' '_')"
+                [ -f "$marker" ] && return 0
+                echo "[ih-seed] preparing IdentityHub (label=$label) ..."
+                kubectl -n "$NAMESPACE" wait --for=condition=Ready pod -l "$label" --timeout="${READINESS_TIMEOUT}s"
+                wait_api "$url" "$(key_for_label "$label")" "IH identity API ($label)"
+                touch "$marker"
+              }
+              # The default IH (single shared IH, or the operator/bundle IH in
+              # per-participant topology) is already Ready + reachable from the
+              # steps above; mark it prepared so the loop never re-waits on it.
+              touch "/tmp/ihready_$(printf '%s' "$IH_POD_LABEL" | tr -c 'A-Za-z0-9' '_')"
 
               ########################################################
               # POST helper: idempotent, treats 409 as success.
@@ -279,10 +319,13 @@ spec:
               ########################################################
               build_ctx_body() {
                 local pid="$1" did="$2" role="$3" srvType="$4" srvUrl="$5"
+                # NOTE: EDC 0.16.0 (IH/IS v0.3.2) renamed the ParticipantManifest
+                # field `participantId` → `participantContextId`. The old name is
+                # rejected with `participantContextId cannot be null or empty`.
                 cat <<JSON
               {
                 "active": true,
-                "participantId": "$pid",
+                "participantContextId": "$pid",
                 "did": "$did",
                 "roles": ["$role"],
                 "key": {
@@ -325,12 +368,51 @@ spec:
                 case "$1" in
                   MembershipCredential)
                     printf 'https://raw.githubusercontent.com/eclipse-tractusx/tractusx-profiles/main/cx/credentials/membership.credential.schema.json' ;;
+                  BpnCredential)
+                    printf 'https://raw.githubusercontent.com/eclipse-tractusx/tractusx-profiles/main/cx/credentials/bpn.credential.schema.json' ;;
                   DataExchangeGovernanceCredential)
                     printf 'https://raw.githubusercontent.com/eclipse-tractusx/tractusx-profiles/main/cx/credentials/dataExchangeGovernance.credential.schema.json' ;;
                   FrameworkAgreementCredential)
                     printf 'https://raw.githubusercontent.com/eclipse-tractusx/tractusx-profiles/main/cx/credentials/frameworkAgreement.credential.schema.json' ;;
                   *)
                     printf '' ;;
+                esac
+              }
+              # Per-type attestation set. Most types read only the shared
+              # `holders` database attestation; the framework/governance
+              # credentials additionally read the `holder` attestation so the
+              # issuer can source per-holder properties (e.g. contractVersion)
+              # that are NOT columns of the holders table.
+              cred_attestations_for() {
+                case "$1" in
+                  DataExchangeGovernanceCredential|FrameworkAgreementCredential)
+                    printf '["%s","%s"]' "$ATTESTATION_ID" "$HOLDER_ATTESTATION_ID" ;;
+                  *)
+                    printf '["%s"]' "$ATTESTATION_ID" ;;
+                esac
+              }
+              # Per-type credentialSubject mappings. Every credential carries
+              # id + holderIdentifier; type-specific claims are added so the
+              # tractusx-edc CX (2025/09) policy constraint functions can
+              # actually evaluate them — the thin {id,holderIdentifier} subject
+              # satisfies only the Membership PRESENCE check:
+              #   * BpnCredential -> credentialSubject.bpn. BusinessPartnerNumber
+              #     reads the first subject claim whose key ENDS WITH "bpn";
+              #     holderIdentifier does not qualify. The BPN already lives in
+              #     the holders.holder_id column, so reuse it.
+              #   * DataExchangeGovernance/FrameworkAgreement ->
+              #     credentialSubject.contractVersion. FrameworkAgreement does an
+              #     EXACT string match of the version after ':' (e.g. "1.0").
+              #     Sourced from the holder `properties` via the holder attestation.
+              cred_mappings_for() {
+                base='{ "input": "did", "output": "credentialSubject.id", "required": true }, { "input": "holder_id", "output": "credentialSubject.holderIdentifier", "required": true }'
+                case "$1" in
+                  BpnCredential)
+                    printf '%s, { "input": "holder_id", "output": "credentialSubject.bpn", "required": true }' "$base" ;;
+                  DataExchangeGovernanceCredential|FrameworkAgreementCredential)
+                    printf '%s, { "input": "contractVersion", "output": "credentialSubject.contractVersion", "required": true }' "$base" ;;
+                  *)
+                    printf '%s' "$base" ;;
                 esac
               }
 
@@ -397,6 +479,40 @@ spec:
                 "(setup §5) IS attestation"
 
               ########################################################
+              # SETUP step 5b: create a `holder` attestation. Unlike the
+              # `database` attestation (which surfaces holders-table columns),
+              # the holder attestation surfaces the holder's own `properties`
+              # map (set at registration in step C) as issuance input claims.
+              # This is the only way per-holder values that are NOT
+              # holders-table columns — e.g. the framework-agreement
+              # contractVersion — can reach the credentialSubject via the
+              # CredentialDefinition mappings. The IssuerService bundles the
+              # `issuerservice-holder-attestations` extension that registers
+              # the "holder" attestation type.
+              ########################################################
+              # Framework-agreement contract version embedded in the
+              # DataExchangeGovernance/FrameworkAgreement credentials. MUST match
+              # the version used in the dataspace access/usage policies'
+              # `FrameworkAgreement eq DataExchangeGovernance:<version>` constraint
+              # (the cx-policy FrameworkAgreementConstraintFunction does an exact
+              # string match on the version after ':').
+              FRAMEWORK_CONTRACT_VERSION="1.0"
+              HOLDER_ATTESTATION_ID="holder-properties-attestation"
+              HOLDER_ATTESTATION_BODY=$(cat <<JSON
+              {
+                "id": "$HOLDER_ATTESTATION_ID",
+                "attestationType": "holder",
+                "configuration": {}
+              }
+              JSON
+              )
+              post_idem \
+                "$IS_ISSUERADMIN/v1alpha/participants/$ISSUER_PID_B64/attestations" \
+                "$IS_KEY" \
+                "$HOLDER_ATTESTATION_BODY" \
+                "(setup §5b) IS holder attestation"
+
+              ########################################################
               # SETUP step 6: create one CredentialDefinition per unique
               # credential type declared anywhere under
               # wallet.participants[].credentials. The set is computed
@@ -409,18 +525,17 @@ spec:
                 [ -z "$CRED_TYPE" ] && continue
                 CRED_ID=$(cred_def_id_for "$CRED_TYPE")
                 CRED_SCHEMA=$(cred_schema_for "$CRED_TYPE")
+                CRED_ATTESTATIONS=$(cred_attestations_for "$CRED_TYPE")
+                CRED_MAPPINGS=$(cred_mappings_for "$CRED_TYPE")
                 CRED_DEF_BODY=$(cat <<JSON
               {
                 "id": "$CRED_ID",
                 "credentialType": "$CRED_TYPE",
                 "format": "VC1_0_JWT",
-                "attestations": ["$ATTESTATION_ID"],
+                "attestations": $CRED_ATTESTATIONS,
                 "jsonSchema": "{}",
                 "jsonSchemaUrl": "$CRED_SCHEMA",
-                "mappings": [
-                  { "input": "did",       "output": "credentialSubject.id",               "required": true },
-                  { "input": "holder_id", "output": "credentialSubject.holderIdentifier", "required": true }
-                ],
+                "mappings": [ $CRED_MAPPINGS ],
                 "validity": 31536000
               }
               JSON
@@ -448,9 +563,26 @@ spec:
                 ROLE=$(echo "$entry" | jq -r '.value.role')
                 DID=$(echo "$entry" | jq -r '.value.did')
                 PART_ID=$(echo "$entry" | jq -r '.value.participantId')
-                PART_B64=$(echo "$entry" | jq -r '.value.participantIdB64')
+                # EDC/IdentityHub 0.17.0 (IH #937): plain participantContextId in URL
+                # paths (incl. the CredentialService serviceEndpoint baked into the DID
+                # document). Keep the var name; assign the plain id.
+                PART_B64="$PART_ID"
                 VAULT_URL=$(echo "$entry" | jq -r '.value.vaultUrl // ""')
                 VAULT_TOKEN=$(echo "$entry" | jq -r '.value.vaultToken // ""')
+
+                # Per-participant topology: resolve THIS holder's own
+                # IdentityHub (identity API, credentials API, pod label).
+                # These keys are present in participants.json only when
+                # wallet.identityHub.topology=perParticipant; in shared
+                # topology they are absent and we fall back to the single IH.
+                P_IH_IDENTITY=$(echo "$entry" | jq -r '.value.ihIdentityApiInternal // ""')
+                P_IH_CREDENTIALS=$(echo "$entry" | jq -r '.value.ihCredentialsApiInternal // ""')
+                P_IH_LABEL=$(echo "$entry" | jq -r '.value.ihPodLabel // ""')
+                CUR_IH_IDENTITY="${P_IH_IDENTITY:-$IH_IDENTITY}"
+                CUR_IH_CREDENTIALS="${P_IH_CREDENTIALS:-$IH_CREDENTIALS}"
+                CUR_IH_LABEL="${P_IH_LABEL:-$IH_POD_LABEL}"
+                prepare_ih "$CUR_IH_LABEL" "$CUR_IH_IDENTITY"
+                CUR_IH_KEY=$(key_for_label "$CUR_IH_LABEL")
 
                 echo ""
                 echo "================================================================"
@@ -462,13 +594,13 @@ spec:
                 #     inline keypair generation + CredentialService
                 #     serviceEndpoint (per walkthrough §02).
                 ######################################################
-                HOLDER_CS_URL="$IH_CREDENTIALS/v1/participants/$PART_B64"
+                HOLDER_CS_URL="$CUR_IH_CREDENTIALS/v1/participants/$PART_B64"
                 IH_BODY=$(build_ctx_body \
                   "$PART_ID" "$DID" "ROLE_USER" \
                   "CredentialService" "$HOLDER_CS_URL")
                 post_idem \
-                  "$IH_IDENTITY/v1alpha/participants" \
-                  "$IH_KEY" \
+                  "$CUR_IH_IDENTITY/v1alpha/participants" \
+                  "$CUR_IH_KEY" \
                   "$IH_BODY" \
                   "(A) IH holder participant-context"
 
@@ -516,8 +648,8 @@ spec:
                 #     and exposes the verification method to consumers.
                 ######################################################
                 post_idem \
-                  "$IH_IDENTITY/v1alpha/participants/$PART_B64/state?isActive=true" \
-                  "$IH_KEY" \
+                  "$CUR_IH_IDENTITY/v1alpha/participants/$PART_B64/state?isActive=true" \
+                  "$CUR_IH_KEY" \
                   "" \
                   "(B) IH holder activate"
 
@@ -529,7 +661,10 @@ spec:
               {
                 "did": "$DID",
                 "holderId": "$BPN",
-                "name": "$PID ($BPN)"
+                "name": "$PID ($BPN)",
+                "properties": {
+                  "contractVersion": "$FRAMEWORK_CONTRACT_VERSION"
+                }
               }
               JSON
               )
@@ -559,10 +694,19 @@ spec:
                 echo "$CRED_LIST" | jq -r '.[]' | while read -r CRED_TYPE; do
                   [ -z "$CRED_TYPE" ] && continue
                   CRED_ID=$(cred_def_id_for "$CRED_TYPE")
+                  # holderPid is the holder-assigned request id and becomes the
+                  # PRIMARY KEY of the IdentityHub holder-credential-request store
+                  # (edc_holder_credentialrequest.id). It MUST be unique per
+                  # request: using a constant (e.g. the issuer DID) collides
+                  # across participants — harmless on the in-memory store, but on
+                  # the persistent (postgres) store only the FIRST participant's
+                  # request inserts and the rest hit a PK violation and never
+                  # issue. Make it unique per participant+credential-type.
+                  HOLDER_PID="${PART_ID}-$(printf '%s' "$CRED_TYPE" | tr '[:upper:]' '[:lower:]')"
                   REQ_BODY=$(cat <<JSON
               {
                 "issuerDid": "$ISSUER_DID",
-                "holderPid": "$ISSUER_DID",
+                "holderPid": "$HOLDER_PID",
                 "credentials": [
                   { "id": "$CRED_ID", "type": "$CRED_TYPE", "format": "VC1_0_JWT" }
                 ]
@@ -570,18 +714,29 @@ spec:
               JSON
               )
                   if post_softfail \
-                       "$IH_IDENTITY/v1alpha/participants/$PART_B64/credentials/request" \
-                       "$IH_KEY" \
+                       "$CUR_IH_IDENTITY/v1alpha/participants/$PART_B64/credentials/request" \
+                       "$CUR_IH_KEY" \
                        "$REQ_BODY" \
                        "(D §8) IH request $CRED_TYPE for $PID"; then
                     # Poll IH for the credential to appear in state ISSUED.
+                    # EDC 0.16.0 (IH v0.3.2) changes the credentials API:
+                    #   * `.state` is now the numeric VcStatus code (500 = ISSUED),
+                    #     no longer the string "ISSUED".
+                    #   * the credential `type` is an array
+                    #     (e.g. ["VerifiableCredential","MembershipCredential"])
+                    #     nested under `.verifiableCredential.credential.type`.
+                    # Accept both the new numeric/array shape and the legacy one.
                     ok=0
                     for j in $(seq 1 20); do
                       body=$(curl -sS \
-                        -H "x-api-key: $IH_KEY" \
-                        "$IH_IDENTITY/v1alpha/participants/$PART_B64/credentials" || echo '[]')
+                        -H "x-api-key: $CUR_IH_KEY" \
+                        "$CUR_IH_IDENTITY/v1alpha/participants/$PART_B64/credentials" || echo '[]')
                       if echo "$body" | jq -e --arg t "$CRED_TYPE" \
-                           '.[] | select(.type == $t and .state == "ISSUED")' \
+                           '.[] | select(
+                              ((.verifiableCredential.credential.type // .credential.type // .type // [])
+                                 | if type=="array" then index($t) else . == $t end)
+                              and (.state == 500 or .state == "ISSUED")
+                            )' \
                            >/dev/null 2>&1; then
                         echo "[ih-seed] (D §9) $CRED_TYPE ISSUED for $PID (attempt $j)"
                         ok=1

@@ -23,6 +23,21 @@ digital-twin-registry:
   registry:
     # @ignore
     authentication: false
+    # NOTE: The DTR is a Spring Boot app whose startup can exceed the default
+    # 100s window on a loaded/CPU-overcommitted local cluster (kind). When that
+    # happens the liveness probe sends SIGTERM mid-boot ("Scan interrupted",
+    # exitCode 143) and the pod enters CrashLoopBackOff. Widen the startup
+    # window so a slow boot is not mistaken for a failure.
+    # @ignore
+    livenessProbe:
+      failureThreshold: 12
+      periodSeconds: 5
+      initialDelaySeconds: 150
+    # @ignore
+    readinessProbe:
+      failureThreshold: 12
+      periodSeconds: 5
+      initialDelaySeconds: 150
     # -- External hostname for Digital Twin Registry
     # @section -- Registry Configuration
     host: dataprovider-dtr.test

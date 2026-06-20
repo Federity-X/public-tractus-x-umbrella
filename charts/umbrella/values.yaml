@@ -60,8 +60,13 @@ wallet:
       bpn: "BPNL00000003CRHK"
       role: operator   # operator | provider | consumer
       # Credential set requested from the IssuerService for this participant.
+      # NOTE: BpnCredential is mandatory — the tractusx-edc DSP catalog
+      # verifier requests MembershipCredential + BpnCredential +
+      # DataExchangeGovernanceCredential, and rejects the presentation
+      # (HTTP 401 Unauthorized) if any of the three is missing.
       credentials:
         - MembershipCredential
+        - BpnCredential
         - DataExchangeGovernanceCredential
         - FrameworkAgreementCredential
     provider:
@@ -69,6 +74,7 @@ wallet:
       role: provider
       credentials:
         - MembershipCredential
+        - BpnCredential
         - DataExchangeGovernanceCredential
         - FrameworkAgreementCredential
       # D23b: connector-local Vault coordinates. The IH seed Job writes the
@@ -83,6 +89,7 @@ wallet:
       role: consumer
       credentials:
         - MembershipCredential
+        - BpnCredential
         - DataExchangeGovernanceCredential
         - FrameworkAgreementCredential
       vaultUrl: "http://{{ .Release.Name }}-edc-dataconsumer-1-vault:8200"
@@ -92,6 +99,7 @@ wallet:
       role: consumer
       credentials:
         - MembershipCredential
+        - BpnCredential
         - DataExchangeGovernanceCredential
         - FrameworkAgreementCredential
       vaultUrl: "http://{{ .Release.Name }}-edc-dataconsumer-2-vault:8200"
@@ -151,10 +159,25 @@ wallet:
         isIdentity: 8087        # /api/identity
         isIssuance: 8082        # /api/issuance
     perParticipant:
-      # Map BPN -> ingress host for that participant's Identity Hub.
-      # Populated only when topology=perParticipant.
+      # Map participant slug (the keys of wallet.participants:
+      # operator | provider | consumer1 | consumer2) -> ingress host for that
+      # participant's OWN Identity Hub. Populated only when
+      # topology=perParticipant (see
+      # values-test-data-exchange-identity-hub-per-participant.yaml).
+      # DIDs are constructed as did:web:<hosts[slug]> (host root, no BPN path).
       hosts: {}
-      # DIDs are constructed as did:web:<hosts[BPN]>:<BPN>
+      # Map participant slug -> in-cluster IdentityHub "name" (the Helm
+      # dependency alias). The upstream chart renders Service
+      # `<release>-<base>` and pod label `app.kubernetes.io/name=<base>`.
+      # The operator reuses the bundle's IdentityHub (alias `identity-hub`);
+      # provider/consumer1/consumer2 use the umbrella-level aliased IH deps.
+      # Consumed by the derived ConfigMap + seeding Job to reach each IH.
+      # Ports are chart-invariant, so the shared.ports map above is reused.
+      serviceBase:
+        operator:  "identity-hub"
+        provider:  "identity-hub-provider"
+        consumer1: "identity-hub-consumer1"
+        consumer2: "identity-hub-consumer2"
 
 portal:
   enabled: false
@@ -1634,6 +1657,23 @@ bdrs-server-memory:
         className: "nginx"
         tls:
           enabled: false
+
+# -----------------------------------------------------------------------------
+# Per-participant IdentityHub instances (#1609 per-participant topology).
+# DISABLED by default — the `shared` topology uses a single IdentityHub from
+# identity-and-trust-bundle. The per-participant profile
+# (values-test-data-exchange-identity-hub-per-participant.yaml) flips these to
+# `enabled: true` and supplies the full per-host configuration (ingresses,
+# probes, resources, did:web host, super-user key alias). Keeping only
+# `enabled: false` here means the default / stub / shared profiles never
+# instantiate these pods.
+# -----------------------------------------------------------------------------
+identity-hub-provider:
+  enabled: false
+identity-hub-consumer1:
+  enabled: false
+identity-hub-consumer2:
+  enabled: false
 
 identity-and-trust-bundle:
   enabled: false

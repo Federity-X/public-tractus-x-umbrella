@@ -43,9 +43,9 @@
 {{-   if eq $w.identityHub.topology "shared" -}}
 {{-     printf "%s:%s" $w.identityHub.shared.didBase $p.bpn -}}
 {{-   else -}}
-{{-     $host := index $w.identityHub.perParticipant.hosts $p.bpn -}}
-{{-     if not $host -}}{{- fail (printf "umbrella.wallet: no perParticipant host for BPN %s" $p.bpn) -}}{{- end -}}
-{{-     printf "did:web:%s" $host -}}
+{{-     $host := index $w.identityHub.perParticipant.hosts $pid -}}
+{{-     if not $host -}}{{- fail (printf "umbrella.wallet: no perParticipant host for participant %s" $pid) -}}{{- end -}}
+{{-     printf "did:web:%s:%s" $host $p.bpn -}}
 {{-   end -}}
 {{- else -}}
 {{-   fail (printf "umbrella.wallet: unsupported mode %q" $w.mode) -}}
@@ -61,10 +61,46 @@
 {{- if eq $w.identityHub.topology "shared" -}}
 {{-   $w.identityHub.shared.baseUrl -}}
 {{- else -}}
-{{-   $p := index $w.participants $pid -}}
-{{-   $host := index $w.identityHub.perParticipant.hosts $p.bpn -}}
+{{-   $host := index $w.identityHub.perParticipant.hosts $pid -}}
+{{-   if not $host -}}{{- fail (printf "umbrella.wallet: no perParticipant host for participant %s" $pid) -}}{{- end -}}
 {{-   printf "http://%s" $host -}}
 {{- end -}}
+{{- end -}}
+
+{{/* ---- per-participant IH in-cluster reach (service base / pod label / internal APIs) ----
+     `serviceBase` = the Helm dependency alias of the participant's IdentityHub.
+     The upstream chart renders Service `<release>-<base>` and pod label
+     `app.kubernetes.io/name=<base>`. Ports are chart-invariant, so we reuse the
+     `shared.ports` map for both topologies. */}}
+{{- define "umbrella.wallet.ihServiceBaseFor" -}}
+{{- $ctx := .ctx -}}
+{{- $pid := .pid -}}
+{{- $w := $ctx.Values.wallet -}}
+{{- if eq $w.identityHub.topology "shared" -}}
+{{-   $w.identityHub.shared.internalIdentityHubService -}}
+{{- else -}}
+{{-   $b := index $w.identityHub.perParticipant.serviceBase $pid -}}
+{{-   if not $b -}}{{- fail (printf "umbrella.wallet: no perParticipant serviceBase for participant %s" $pid) -}}{{- end -}}
+{{-   $b -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "umbrella.wallet.ihPodLabelFor" -}}
+{{- printf "app.kubernetes.io/name=%s" (include "umbrella.wallet.ihServiceBaseFor" .) -}}
+{{- end -}}
+
+{{- define "umbrella.wallet.ihIdentityApiInternalFor" -}}
+{{- $ctx := .ctx -}}
+{{- $base := include "umbrella.wallet.ihServiceBaseFor" . -}}
+{{- $ports := $ctx.Values.wallet.identityHub.shared.ports -}}
+{{- printf "http://%s-%s:%d/api/identity" $ctx.Release.Name $base (int $ports.ihIdentity) -}}
+{{- end -}}
+
+{{- define "umbrella.wallet.ihCredentialsApiInternalFor" -}}
+{{- $ctx := .ctx -}}
+{{- $base := include "umbrella.wallet.ihServiceBaseFor" . -}}
+{{- $ports := $ctx.Values.wallet.identityHub.shared.ports -}}
+{{- printf "http://%s-%s:%d/api/credentials" $ctx.Release.Name $base (int $ports.ihCredentials) -}}
 {{- end -}}
 
 {{- define "umbrella.wallet.credentialServiceUrl" -}}

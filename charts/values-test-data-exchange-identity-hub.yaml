@@ -28,8 +28,8 @@
 # `-per-participant` sibling profile for a split-deployment topology.
 #
 # Charts used (pinned in charts/identity-and-trust-bundle/Chart.yaml):
-#   - tractusx-identityhub-memory  v0.2.0  (aliased as `identity-hub`)
-#   - tractusx-issuerservice       v0.2.0  (aliased as `issuer-service`,
+#   - tractusx-identityhub-memory  v0.3.2  (aliased as `identity-hub`)
+#   - tractusx-issuerservice       v0.3.2  (aliased as `issuer-service`,
 #                                            postgres+vault variant — required
 #                                            for the bundled `database`
 #                                            attestation extension used in §5
@@ -45,13 +45,17 @@
 # CAVEATS (see also ECOSYSTEM-GUIDE.md §7.y):
 #   * The post-install Identity-Hub seeding hook
 #     (charts/tx-data-provider/templates/post-install-identityhub-seed.yaml)
-#     is based on the documented Identity API schema for v0.2.0. REST
-#     payloads may drift; verify against the pinned chart version before
-#     running in CI.
-#   * `tractusx-connector` 0.11.2 still uses the key names `iatp` and
-#     `sts.dim` in its Helm schema even though Tractus-X has renamed DCP
-#     key concepts. We keep the old keys here until the connector's
-#     values schema catches up.
+#     uses the Identity API `v1alpha` schema, which remains valid in v0.3.2.
+#     REST payloads may still drift; verify against the pinned chart version
+#     before running in CI.
+#   * `tractusx-connector` 0.13.0 renamed its Helm schema keys: `iatp` →
+#     `dcp` and `sts.dim` → `sts.div`. The connector's `participant.id` now
+#     carries the DID (the BPN moved to `participant.bpnl`). These keys are
+#     used below.
+#   * The IdentityHub credential-service URL is now per-participant:
+#     `/api/credentials/v1/participants/{base64url(participantId)}`. The
+#     base64url context ids below are precomputed from the umbrella
+#     `wallet.participants` map (role-bpn → base64url).
 #   * `sts.oauth.token_url` may be a no-op against Identity Hub's STS
 #     (which is DCP-native, not OAuth2). Leaving it populated to satisfy
 #     schema validation; the embedded-STS extension is the preferred path.
@@ -71,6 +75,21 @@ identity-and-trust-bundle:
     enabled: true
   issuer-service:
     enabled: true
+    # D25: Override upstream default `issuerservice.issuance.local` (no scheme,
+    # not resolvable) with the absolute, cluster-reachable URL of the IS
+    # status-list endpoint. This value is embedded verbatim into every issued
+    # VC's `credentialStatus.statusListCredential` field. When it is not an
+    # absolute URI, downstream VP verifiers (e.g. BDRS's
+    # `BaseRevocationListService.downloadStatusListCredential`) fail with
+    # `java.lang.IllegalArgumentException: URI is not absolute`, resulting in
+    # a 400 Bad Request to the connector's BDRS DID-resolution call.
+    #
+    # Host `issuer-service.tx.test` matches the ingress declared in
+    # identity-and-trust-bundle/values.yaml (endpoint: statuslist). For
+    # pod-side resolution we rely on the CoreDNS .tx.test patch Job (D16).
+    statuslist:
+      callback:
+        address: "http://issuer-service.tx.test/statuslist"
 
 # -----------------------------------------------------------------------------
 # EDC connectors → Identity Hub endpoints.
@@ -92,19 +111,23 @@ dataconsumerOne:
     mode: identityHub
   dataspace-connector-bundle:
     tractusx-connector:
-      iatp:
-        id: did:web:identity-hub.tx.test:BPNL00000003AZQP
+      dcp:
+        # Trusted issuer = the IssuerService DID (it SIGNS the VCs), NOT the
+        # IdentityHub DID (which only HOSTS/presents them). The VC `issuer`
+        # field is did:web:issuer-service.tx.test:BPNL00000003CRHK; EDC 0.16.0's
+        # TrustedIssuerRegistry rejects credentials whose issuer DID is not in
+        # this list ("Credential types [...] are not supported for issuer ...").
         trustedIssuers:
-          - did:web:identity-hub.tx.test:BPNL00000003CRHK
+          - did:web:issuer-service.tx.test:BPNL00000003CRHK
         sts:
-          # D22: set sts.dim.url to empty string so the connector loads only the
+          # D22: set sts.div.url to empty string so the connector loads only the
           # OAuth2 STS client (RemoteSecureTokenService) which posts form-encoded
           #   grant_type=client_credentials&client_id=<did>&audience=<target-did>&client_secret=<secret>
-          # The tractusx-connector chart emits TX_EDC_IAM_STS_DIM_URL only when
-          # .Values.iatp.sts.dim.url is truthy (deployment-controlplane.yaml:242),
-          # so empty string suppresses it and prevents tx-dcp-sts-dim from loading.
-          # (Helm does not honour `dim: null` for overriding subchart map defaults.)
-          dim:
+          # The tractusx-connector chart emits TX_EDC_IAM_STS_DIV_URL only when
+          # .Values.dcp.sts.div.url is truthy (deployment-controlplane.yaml),
+          # so empty string suppresses it and prevents the DIM STS client from loading.
+          # (Helm does not honour `div: null` for overriding subchart map defaults.)
+          div:
             url: ""
           oauth:
             token_url: http://identity-hub.tx.test/api/sts/token
@@ -117,15 +140,28 @@ dataconsumerOne:
               # full DID or IH returns 401 invalid_client.
               id: did:web:identity-hub.tx.test:BPNL00000003AZQP
               secret_alias: edc-wallet-secret
+      participant:
+        # DID of the connector (EDC participant id / issuer id in 0.13.0+)
+        id: did:web:identity-hub.tx.test:BPNL00000003AZQP
+        # BPN (tractusx.edc.participant.bpn)
+        bpnl: BPNL00000003AZQP
+        # Connector multi-tenancy contextId = the IdentityHub participantContextId.
+        # EDC 0.17.0 / IH #937 use the PLAIN id in URL paths (no base64url), and
+        # the seed registers the IH ParticipantContext under this plain id.
+        contextId: "consumer-bpnl00000003azqp"
       controlplane:
         env:
-          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
+          # Own credential-service URL. EDC 0.17.0 reads TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL;
+          # the legacy TX_IAM_IATP_ name is kept for back-compat. Plain participantContextId.
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
         bdrs:
           server:
             url: http://bdrs-server:8082/api/directory
       dataplane:
         env:
-          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
 
 tx-data-provider:
   enabled: true
@@ -133,27 +169,34 @@ tx-data-provider:
     mode: identityHub
   dataspace-connector-bundle:
     tractusx-connector:
-      iatp:
-        id: did:web:identity-hub.tx.test:BPNL00000003AYRE
+      dcp:
+        # Trusted issuer = IssuerService DID (signer of the VCs), see note above.
         trustedIssuers:
-          - did:web:identity-hub.tx.test:BPNL00000003CRHK
+          - did:web:issuer-service.tx.test:BPNL00000003CRHK
         sts:
-          dim:
+          div:
             url: ""
           oauth:
             token_url: http://identity-hub.tx.test/api/sts/token
             client:
               id: did:web:identity-hub.tx.test:BPNL00000003AYRE
               secret_alias: edc-wallet-secret
+      participant:
+        id: did:web:identity-hub.tx.test:BPNL00000003AYRE
+        bpnl: BPNL00000003AYRE
+        # plain participantContextId (EDC 0.17.0 / IH #937)
+        contextId: "provider-bpnl00000003ayre"
       controlplane:
         env:
-          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
         bdrs:
           server:
             url: http://bdrs-server:8082/api/directory
       dataplane:
         env:
-          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
 
 dataconsumerTwo:
   enabled: true
@@ -161,27 +204,34 @@ dataconsumerTwo:
     mode: identityHub
   dataspace-connector-bundle:
     tractusx-connector:
-      iatp:
-        id: did:web:identity-hub.tx.test:BPNL00000003AVTH
+      dcp:
+        # Trusted issuer = IssuerService DID (signer of the VCs), see note above.
         trustedIssuers:
-          - did:web:identity-hub.tx.test:BPNL00000003CRHK
+          - did:web:issuer-service.tx.test:BPNL00000003CRHK
         sts:
-          dim:
+          div:
             url: ""
           oauth:
             token_url: http://identity-hub.tx.test/api/sts/token
             client:
               id: did:web:identity-hub.tx.test:BPNL00000003AVTH
               secret_alias: edc-wallet-secret
+      participant:
+        id: did:web:identity-hub.tx.test:BPNL00000003AVTH
+        bpnl: BPNL00000003AVTH
+        # plain participantContextId (EDC 0.17.0 / IH #937)
+        contextId: "consumer-bpnl00000003avth"
       controlplane:
         env:
-          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
         bdrs:
           server:
             url: http://bdrs-server:8082/api/directory
       dataplane:
         env:
-          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
 
 # BDRS — re-seed with Identity-Hub-hosted DIDs
 bdrs-server-memory:
@@ -198,8 +248,10 @@ bdrs-server-memory:
       - bpn: "BPNL00000003AVTH"
         did: "did:web:identity-hub.tx.test:BPNL00000003AVTH"
   server:
+    # Trusted issuer = IssuerService DID (signer of the VCs); BDRS verifies the
+    # membership VC presented during DID registration against this list.
     trustedIssuers:
-      - did:web:identity-hub.tx.test:BPNL00000003CRHK
+      - did:web:issuer-service.tx.test:BPNL00000003CRHK
     env:
       EDC_IAM_DID_WEB_USE_HTTPS: false
     endpoints:

@@ -164,7 +164,7 @@ ssi-dim-wallet-stub:
 # `ssi-dim-wallet-stub.enabled=false`. The umbrella mutual-exclusion validator
 # enforces this.
 #
-# The underlying chart is `tractusx-identityhub-memory` v0.2.0 (aliased to
+# The underlying chart is `tractusx-identityhub-memory` v0.3.2 (aliased to
 # `identity-hub` in Chart.yaml). Its schema is documented at:
 #   https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/charts/tractusx-identityhub-memory
 # -----------------------------------------------------------------------------
@@ -191,6 +191,22 @@ identity-hub:
       periodSeconds: 15
       timeoutSeconds: 10
       failureThreshold: 6
+    # The chart sets no `resources` by default, so the cluster applies a 512Mi
+    # default limit which the EDC 0.16.0 IdentityHub JVM exceeds during boot
+    # (extension load + Flyway) → OOMKilled / CrashLoopBackOff. Pin a 2Gi limit.
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1
+        memory: 2Gi
+    # NOTE: do NOT set EDC_ENCRYPTION_STRICT (or any `edc.encryption.strict`)
+    # via env here. The v0.3.2 chart config (identityhub-config.yaml) already
+    # emits `edc.encryption.strict: "false"`. EDC 0.16.0's ConfigFactory merges
+    # env + file config and FAILS on a duplicate key even when the values match
+    # (`Duplicate key edc.encryption.strict (attempted merging values false and
+    # false)`) → CrashLoopBackOff. The chart default is sufficient.
     # endpoints.* keys match the real chart schema (ports 8080–8087). The
     # umbrella exposes `identity`, `credentials`, `did`, and `sts` via ingress.
     endpoints:
@@ -244,7 +260,18 @@ identity-hub:
           enabled: false
 
 # -----------------------------------------------------------------------------
-# Issuer Service — companion to Identity Hub (`tractusx-issuerservice` v0.2.0,
+# Identity Hub — PERSISTENT / postgres variant (`tractusx-identityhub` v0.3.2,
+# aliased to `identity-hub-postgres`). Mutually exclusive with `identity-hub`
+# (in-memory) and the stub; disabled by default. Full config lives in
+# values-test-data-exchange-identity-hub-postgres.yaml. Unlike the in-memory
+# variant, ParticipantContexts/keys/credentials persist across pod restarts
+# (bundled postgres + vault), so no re-seed is needed after a restart.
+# -----------------------------------------------------------------------------
+identity-hub-postgres:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# Issuer Service — companion to Identity Hub (`tractusx-issuerservice` v0.3.2,
 # aliased to `issuer-service`). Issues VCs into each participant's
 # ParticipantContext via the DCP Credential Issuance Protocol (CIP).
 #
@@ -290,9 +317,36 @@ issuer-service:
     # `/issuer` database suffix — that's the DB the bitnami chart auto-creates
     # from `postgresql.auth.database` (default "issuer" upstream).
     jdbcUrl: "jdbc:postgresql://{{ .Release.Name }}-issuer-postgresql:5432/issuer"
-    primary:
-      persistence:
-        enabled: false
+    # CRITICAL: PVC-backed persistence WITH delete-on-uninstall retention.
+    #
+    # The IS chart's postgres dependency is the cloudpirates `postgres` chart,
+    # whose persistence flag lives at the TOP LEVEL (`persistence.enabled`),
+    # NOT under `primary.persistence`.
+    #
+    # We use a PVC (not emptyDir) because the IssuerService keeps its issued
+    # credentials AND the status-list credentials that every issued VC points
+    # at (`credentialStatus.statusListCredential`). With emptyDir, ANY restart
+    # of this postgres pod (node pressure, eviction, kubelet churn) WIPES that
+    # DB while the long-lived IssuerService pod keeps running against it. The
+    # status-list endpoint then 500s/404s, the IdentityHub `CredentialWatchdog`
+    # cannot resolve credential status, and it moves every holder credential to
+    # the `ERROR` (VcStatus -100) state — which silently breaks the whole DCP
+    # data-exchange flow (empty catalogs, "No BPN entry found for agreement").
+    #
+    # `persistentVolumeClaimRetentionPolicy.whenDeleted: Delete` keeps the
+    # original clean-reinstall guarantee: the PVC is removed on `helm uninstall`
+    # so a fresh install starts from an empty DB and the postgres-backed IS
+    # re-emits its one-time super-user API key for the seed Job to scrape.
+    # Net: survives restarts (the real failure mode) AND stays clean across
+    # uninstall/reinstall. `storageClass: ""` uses the cluster default.
+    persistence:
+      enabled: true
+      storageClass: ""
+      size: 2Gi
+    persistentVolumeClaimRetentionPolicy:
+      enabled: true
+      whenDeleted: Delete
+      whenScaled: Retain
   # Override JDBC URL to match the renamed postgres Service. Must keep the
   # `/issuer` database suffix — that's the DB the bitnami chart auto-creates
   # from `postgresql.auth.database` (default "issuer" upstream).
@@ -308,6 +362,33 @@ issuer-service:
         enabled: true
         devRootToken: "root"
   issuerservice:
+    # Wait for the bundled PostgreSQL to accept TCP connections BEFORE the
+    # IssuerService JVM starts. EDC 0.16.0's Flyway bootstrap aborts the whole
+    # runtime (exit 1) on a cold-postgres `SocketTimeoutException: Connect timed
+    # out`. That first-boot crash is catastrophic for seeding: the postgres-
+    # backed IS emits its super-user API key only ONCE — on the boot that first
+    # creates the `super-user` ParticipantContext — and never reprints it on a
+    # later boot ("super-user already exists ... will not re-create"). After a
+    # restart the key has scrolled out of `kubectl logs --previous`, so the
+    # post-install-identityhub-seed Job can no longer scrape it and fails with
+    # "could not extract super-user API key". Gating the JVM on postgres
+    # readiness guarantees a single clean boot that keeps the key in the
+    # pod's current logs.
+    # NOTE: the chart renders `initContainers` via `toYaml` (NOT `tpl`), so the
+    # postgres Service name must be a literal. The umbrella local/test profiles
+    # always `helm install umbrella`, so the Service is `umbrella-issuer-postgresql`.
+    initContainers:
+      - name: wait-for-postgres
+        image: busybox:1.36
+        command:
+          - sh
+          - -c
+          - |
+            echo "[wait-for-postgres] waiting for umbrella-issuer-postgresql:5432 ...";
+            until nc -z umbrella-issuer-postgresql 5432; do
+              echo "[wait-for-postgres] not ready, retry in 2s"; sleep 2;
+            done;
+            echo "[wait-for-postgres] postgres is reachable";
     # Postgres-backed IS needs longer probe windows than the in-memory variant.
     # Default initialDelay=5s + period=5s × failure=6 = ~35s, which is too tight
     # when the pod must wait for the bundled postgres + vault subcharts to be
@@ -322,6 +403,21 @@ issuer-service:
       periodSeconds: 15
       timeoutSeconds: 10
       failureThreshold: 6
+    # The chart sets no `resources` by default, so the cluster applies a 512Mi
+    # default limit which the EDC 0.16.0 IssuerService JVM exceeds during boot
+    # (extension load + Flyway across 7 subsystems) → OOMKilled. Pin a 2Gi limit.
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1
+        memory: 2Gi
+    # NOTE: do NOT set EDC_ENCRYPTION_STRICT (or any `edc.encryption.strict`)
+    # via env here. The v0.3.2 chart config (issuerservice-config.yaml) already
+    # emits `edc.encryption.strict: "false"`. EDC 0.16.0's ConfigFactory FAILS
+    # on a duplicate key even when the values match
+    # (`Duplicate key edc.encryption.strict`) → CrashLoopBackOff.
     didweb:
       https: false
     ingresses:

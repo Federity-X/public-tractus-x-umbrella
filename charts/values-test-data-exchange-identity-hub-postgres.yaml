@@ -1,0 +1,295 @@
+###############################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+###############################################################
+#
+# Data-exchange profile using the PERSISTENT (postgres) Identity Hub variant.
+#
+# Identical to values-test-data-exchange-identity-hub.yaml (shared topology,
+# single multi-tenant Identity Hub on identity-hub.tx.test) EXCEPT the Holder
+# Wallet is the postgres-backed `tractusx-identityhub` chart (aliased
+# `identity-hub-postgres`) instead of the in-memory `tractusx-identityhub-memory`
+# (`identity-hub`). ParticipantContexts, keys and issued credentials are stored
+# in a bundled PostgreSQL + Vault, so they survive an IdentityHub pod restart
+# (the in-memory variant loses them and must be re-seeded).
+#
+# Mutually exclusive with the stub and the in-memory IH (enforced by
+# templates/_wallet-validate.tpl). The IH keeps the SAME ingress host
+# (identity-hub.tx.test) and API surface, so the connectors, Issuer Service,
+# seeding hook and BDRS wiring are unchanged from the in-memory profile — only
+# the dependency (and the seed's internal service name) differ.
+#
+# Usage:
+#   bash hack/helm-dependencies.bash          # pulls tractusx-identityhub + repackages
+#   helm install umbrella charts/umbrella \
+#     -f charts/values-test-data-exchange-identity-hub-postgres.yaml \
+#     -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
+#     --namespace umbrella --create-namespace --timeout 25m
+###############################################################
+
+wallet:
+  mode: identityHub
+  operatorBpn: "BPNL00000003CRHK"
+  identityHub:
+    shared:
+      # The seed reaches the IH admin API and scrapes the super-user key from
+      # the IH pod via this in-cluster service base (-> <release>-<base> and
+      # pod label app.kubernetes.io/name=<base>). Point it at the postgres IH.
+      internalIdentityHubService: "identity-hub-postgres"
+      # The postgres IH chart (tractusx-identityhub) exposes a DIFFERENT port
+      # layout than the in-memory chart: 8081=default, identity=8082,
+      # credentials=8083, did=8084 (sts stays 8087). The seed talks to the IH
+      # over the internal service:port, so the IH ports must be overridden here.
+      # (The connectors reach the IH through the ingress, which maps each
+      # endpoint to the right port, so they need no change.)
+      ports:
+        ihIdentity: 8082
+        ihCredentials: 8083
+        ihDid: 8084
+        ihSts: 8087
+
+identity-and-trust-bundle:
+  enabled: true
+  ssi-dim-wallet-stub:
+    enabled: false
+  # Disable the in-memory IH; enable the postgres-backed one instead.
+  identity-hub:
+    enabled: false
+  identity-hub-postgres:
+    enabled: true
+    # Bundled postgres backs the SQL stores (ParticipantContexts, keypairs,
+    # credentials) so they survive a pod restart — the key difference from the
+    # in-memory variant. Vault is left OFF (in-memory key vault, as in the
+    # `-memory` profile): the bundled `vault` subchart would render as
+    # `umbrella-vault` and collide with the umbrella's shared Vault. Enabling a
+    # persistent IH key vault is a separate hardening step.
+    install:
+      postgresql: true
+      vault: false
+    # IMPORTANT: `nameOverride: identityhub-postgresql` avoids a label clash with
+    # `dataprovider-digital-twin-db` — both are bitnami `postgresql` charts
+    # labeled `app.kubernetes.io/instance: umbrella, app.kubernetes.io/name:
+    # postgresql`, so without the override the `umbrella-postgresql` Service
+    # selects BOTH pods and the IdentityHub randomly connects to the DTR's DB
+    # (→ "database ih does not exist"). Same fix the issuer-service uses
+    # (umbrella-issuer-postgresql). The explicit `jdbcUrl` repoints the IH's
+    # datasource ConfigMap at the correctly-named Service.
+    postgresql:
+      nameOverride: identityhub-postgresql
+      jdbcUrl: "jdbc:postgresql://{{ .Release.Name }}-identityhub-postgresql:5432/ih"
+    identityhub:
+      # IH boots in ~30-40s on kind; widen probes so the liveness probe does not
+      # SIGTERM the JVM mid-startup (same rationale as the in-memory variant).
+      livenessProbe:
+        initialDelaySeconds: 90
+        periodSeconds: 15
+        timeoutSeconds: 10
+        failureThreshold: 6
+      readinessProbe:
+        initialDelaySeconds: 90
+        periodSeconds: 15
+        timeoutSeconds: 10
+        failureThreshold: 6
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: 1
+          memory: 2Gi
+      endpoints:
+        identity:
+          authKeyAlias: "sup3r$3cr3t"
+        accounts:
+          authKeyAlias: "sup3r$3cr3t"
+      # Disable the chart's built-in InitialParticipantExtension — the operator
+      # and all other participants are created post-install by the seeding Job
+      # using the runtime-generated super-user key.
+      iatp:
+        sts:
+          oauth:
+            client:
+              enabled: false
+              id: "did:web:identity-hub.tx.test:BPNL00000003CRHK"
+              secret: "operator-sts-secret"
+              secret_alias: "operator-sts-secret-alias"
+              x_api_key: "ZGlkOndlYjppZGVudGl0eS1odWIudHgudGVzdDpCUE5MMDAwMDAwMDNDUkhL.placeholder"
+      didweb:
+        https: false
+      ingresses:
+        - enabled: true
+          hostname: "identity-hub.tx.test"
+          endpoints:
+            - credentials
+            - did
+            - sts
+          className: "nginx"
+          tls:
+            enabled: false
+        - enabled: true
+          hostname: "identity-hub-admin.tx.test"
+          endpoints:
+            - identity
+            - accounts
+          className: "nginx"
+          tls:
+            enabled: false
+  issuer-service:
+    enabled: true
+    statuslist:
+      callback:
+        address: "http://issuer-service.tx.test/statuslist"
+
+# -----------------------------------------------------------------------------
+# EDC connectors -> Identity Hub endpoints. Identical to the in-memory profile:
+# the postgres IH keeps the same ingress host (identity-hub.tx.test), plain
+# participantContextId (EDC 0.17.0 / IH #937) and credential-service URLs.
+# -----------------------------------------------------------------------------
+dataconsumerOne:
+  enabled: true
+  wallet:
+    mode: identityHub
+    # A single seeding Job (from tx-data-provider) provisions every participant;
+    # disable the redundant per-consumer Jobs.
+    identityHubSeed:
+      enabled: false
+  dataspace-connector-bundle:
+    tractusx-connector:
+      dcp:
+        trustedIssuers:
+          - did:web:issuer-service.tx.test:BPNL00000003CRHK
+        sts:
+          div:
+            url: ""
+          oauth:
+            token_url: http://identity-hub.tx.test/api/sts/token
+            client:
+              id: did:web:identity-hub.tx.test:BPNL00000003AZQP
+              secret_alias: edc-wallet-secret
+      participant:
+        id: did:web:identity-hub.tx.test:BPNL00000003AZQP
+        bpnl: BPNL00000003AZQP
+        contextId: "consumer-bpnl00000003azqp"
+      controlplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+        bdrs:
+          server:
+            url: http://bdrs-server:8082/api/directory
+      dataplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+
+tx-data-provider:
+  enabled: true
+  wallet:
+    mode: identityHub
+    # THE single Identity-Hub seeding Job. The postgres IH pod is labelled
+    # `app.kubernetes.io/name=identity-hub-postgres` (the dependency alias), so
+    # the seed's readiness-wait must target that label rather than the default
+    # `identity-hub` (which matches only the in-memory variant).
+    identityHubSeed:
+      enabled: true
+      identityHubPodLabel: "app.kubernetes.io/name=identity-hub-postgres"
+  dataspace-connector-bundle:
+    tractusx-connector:
+      dcp:
+        trustedIssuers:
+          - did:web:issuer-service.tx.test:BPNL00000003CRHK
+        sts:
+          div:
+            url: ""
+          oauth:
+            token_url: http://identity-hub.tx.test/api/sts/token
+            client:
+              id: did:web:identity-hub.tx.test:BPNL00000003AYRE
+              secret_alias: edc-wallet-secret
+      participant:
+        id: did:web:identity-hub.tx.test:BPNL00000003AYRE
+        bpnl: BPNL00000003AYRE
+        contextId: "provider-bpnl00000003ayre"
+      controlplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+        bdrs:
+          server:
+            url: http://bdrs-server:8082/api/directory
+      dataplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+
+dataconsumerTwo:
+  enabled: true
+  wallet:
+    mode: identityHub
+    identityHubSeed:
+      enabled: false
+  dataspace-connector-bundle:
+    tractusx-connector:
+      dcp:
+        trustedIssuers:
+          - did:web:issuer-service.tx.test:BPNL00000003CRHK
+        sts:
+          div:
+            url: ""
+          oauth:
+            token_url: http://identity-hub.tx.test/api/sts/token
+            client:
+              id: did:web:identity-hub.tx.test:BPNL00000003AVTH
+              secret_alias: edc-wallet-secret
+      participant:
+        id: did:web:identity-hub.tx.test:BPNL00000003AVTH
+        bpnl: BPNL00000003AVTH
+        contextId: "consumer-bpnl00000003avth"
+      controlplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
+        bdrs:
+          server:
+            url: http://bdrs-server:8082/api/directory
+      dataplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://identity-hub.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
+
+# BDRS — re-seed with Identity-Hub-hosted DIDs (same as the in-memory profile).
+bdrs-server-memory:
+  enabled: true
+  seeding:
+    enabled: true
+    bpnList:
+      - bpn: "BPNL00000003CRHK"
+        did: "did:web:identity-hub.tx.test:BPNL00000003CRHK"
+      - bpn: "BPNL00000003AYRE"
+        did: "did:web:identity-hub.tx.test:BPNL00000003AYRE"
+      - bpn: "BPNL00000003AZQP"
+        did: "did:web:identity-hub.tx.test:BPNL00000003AZQP"
+      - bpn: "BPNL00000003AVTH"
+        did: "did:web:identity-hub.tx.test:BPNL00000003AVTH"
+  server:
+    trustedIssuers:
+      - did:web:issuer-service.tx.test:BPNL00000003CRHK
+    env:
+      EDC_IAM_DID_WEB_USE_HTTPS: false
+    endpoints:
+      management:
+        authKey: TEST

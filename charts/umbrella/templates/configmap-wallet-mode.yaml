@@ -75,6 +75,11 @@ data:
         "participantId": {{ $ctxId | quote }},
         "participantIdB64": {{ $b64 | quote }},
         "credentialServiceUrl": {{ $cs | quote }},
+{{- if eq $root.Values.wallet.identityHub.topology "perParticipant" }}
+        "ihIdentityApiInternal": {{ include "umbrella.wallet.ihIdentityApiInternalFor" (dict "ctx" $root "pid" $pid) | quote }},
+        "ihCredentialsApiInternal": {{ include "umbrella.wallet.ihCredentialsApiInternalFor" (dict "ctx" $root "pid" $pid) | quote }},
+        "ihPodLabel": {{ include "umbrella.wallet.ihPodLabelFor" (dict "ctx" $root "pid" $pid) | quote }},
+{{- end }}
         "vaultUrl": {{ $vaultUrl | quote }},
         "vaultToken": {{ $vaultToken | quote }},
         "credentials": {{ $p.credentials | toJson }}
