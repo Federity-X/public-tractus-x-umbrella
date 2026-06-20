@@ -28,12 +28,15 @@
 # IdentityHub/IssuerService 0.17.0 are released and pinned in the bundle
 # Chart.yaml files.
 #
-# The four images below must be pre-loaded into the local (kind/minikube)
-# cluster — they are not on a public registry:
-#   docker-identityhub-memory:latest   — tractusx-identityhub PR #308 build (0.17.0)
-#   docker-issuerservice:latest        — tractusx-issuerservice PR #308 build (0.17.0, postgres variant)
-#   tractusx/edc-controlplane-postgresql-hashicorp-vault:0.13.0-SNAPSHOT — EDC 0.17.0
-#   tractusx/edc-dataplane-hashicorp-vault:0.13.0-SNAPSHOT               — EDC 0.17.0
+# The four images below are built from source (not on a public registry) and
+# must be pre-loaded into the local (kind/minikube) cluster. Their provenance:
+#   docker-identityhub-memory:latest   — tractusx-identityhub PR #309 (EDC 0.17.0 upgrade)
+#                                         https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309
+#   docker-identityhub:latest          — same PR #309, postgres IdentityHub variant
+#   docker-issuerservice:latest        — same PR #309, IssuerService (postgres variant)
+#   tractusx/edc-controlplane-postgresql-hashicorp-vault:0.13.0-SNAPSHOT — built from
+#                                         tractusx-edc `main` (EDC 0.17.0): https://github.com/eclipse-tractusx/tractusx-edc
+#   tractusx/edc-dataplane-hashicorp-vault:0.13.0-SNAPSHOT               — built from tractusx-edc `main` (EDC 0.17.0)
 # e.g.:  kind load docker-image docker-identityhub-memory:latest --name <cluster>
 #
 # Usage:

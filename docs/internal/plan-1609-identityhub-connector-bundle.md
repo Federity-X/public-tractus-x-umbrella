@@ -65,6 +65,38 @@ BDRS against restarts.)
 
 ---
 
+## 0.3 — Relationship to umbrella PR #412 (separate, complementary work)
+
+A second in-flight umbrella PR exists in the #1609 / 26.06 workstream:
+[tractus-x-umbrella#412](https://github.com/eclipse-tractusx/tractus-x-umbrella/pull/412)
+— _"feat: bundle connector and identity hub"_, by **@AYaoZhan** (LKS Next); **OPEN**,
+closes **#407 + #411** (the bundle-_packaging_ slice) rather than #1609 directly.
+**Both** PRs use the **real** `tractusx-identityhub` (not the stub); they differ in
+intent and depth:
+
+| Dimension | This branch (`feature/1609-…`) | PR #412 |
+|---|---|---|
+| Wallet stack | IdentityHub **and** IssuerService deployed in-chart (holder + issuer/trust anchor) | IdentityHub only; IssuerService is **external** (referenced as DIDs/URLs, not deployed) |
+| Topology | `wallet.mode` abstraction, **three** mutually-exclusive IH profiles (shared in-memory, per-participant 4-IH, persistent postgres) + render-time validator | **Per-participant only** — one merged `decentralized-identity-connector` subchart (EDC+IH+shared postgres/vault) aliased provider+consumer (2 IHs); each in its **own namespace** until IdentityHub > 0.2.0 |
+| Components / source | Unreleased EDC 0.17.0 line: connector from `tractusx-edc` **main** (`0.13.0-SNAPSHOT`), IH/IS from **PR #309** — newer, in-flight | **Released** charts only: IdentityHub v0.2.1, connector via `tx-data-provider` 0.4.6, BDRS 0.6.0 — conservative, stable |
+| End-to-end DCP transfer | **Validated** (catalog → negotiation → transfer → fetch) by a stage-aware smoke test (`hack/dcp-data-transfer-smoke.sh`) | **Deploy/seed-only** — no Job, no CI test profile, no smoke test; docs stop at deploy + manual Bruno exploration (issuance can't run from the chart — IssuerService isn't deployed) |
+| Seeding | **Automated** post-install Job (10-step DCP walkthrough; issues per-type claims `BpnCredential.bpn`, `DataExchangeGovernanceCredential.contractVersion`; plain `participantContextId`; unique `holderPid`) + BDRS hook | **Manual** — operator runs ~13 Bruno requests by hand against the external IssuerService; secrets hand-set; BDRS seeded declaratively |
+| Artifacts shipped | CI/test profiles for all three topologies + the local-0.17.0 image overlay + the smoke script | One adopter profile (`values-adopter-decentralized-identityhub.yaml`) + a Bruno collection + 2 guides |
+| Design intent | Fully-validated end-to-end DCP exchange; wallet kept pluggable behind `wallet.mode` | Reusable, release-pinned **packaging** of connector+IH in one merged subchart |
+
+**In one line:** #412 is the lighter, release-pinned _deployable bundle + manual
+Bruno test docs_ slice; this branch adds the IssuerService, three selectable
+IdentityHub topologies behind `wallet.mode`, automated seeding, and a **validated
+end-to-end DCP data transfer** on the (unreleased) EDC/IH 0.17.0 images. The two
+are complementary — #412's merged-subchart packaging and this branch's
+end-to-end validation + topology abstraction could converge.
+
+_(#412 analyzed 2026-06-20 while OPEN at head `6cc7d5a`; its state may change.
+PR #309 is the author's own OPEN EDC-0.17.0 upgrade of tractusx-identityhub, so
+this branch's 0.17.0 baseline is in-flight.)_
+
+---
+
 ## 0.0 — 2026-06-18 re-plan: latest-component check + per-participant feasibility
 
 **Trigger:** _"use the latest components; can we now achieve per-participant topology?"_
@@ -156,8 +188,8 @@ the committed chart pins still lag it:
 
 | Component         | Committed pin (working tree)      | Stack the transfer was validated on            |
 | ----------------- | --------------------------------- | ---------------------------------------------- |
-| `tractusx-connector` | `0.13.0-rc2` (EDC 0.16.0)      | **`0.13.0-SNAPSHOT` (EDC 0.17.0)** main-line image |
-| IdentityHub / IssuerService | `v0.3.2` (EDC 0.16.0)   | **user's local 0.17.0 build** (PR [tractusx-identityhub#308](https://github.com/eclipse-tractusx/tractusx-identityhub/issues/308), kind-loaded, pullPolicy Never) |
+| `tractusx-connector` | `0.13.0-rc2` (EDC 0.16.0)      | **`0.13.0-SNAPSHOT` (EDC 0.17.0)** — control/data-plane images built from [`tractusx-edc` **main**](https://github.com/eclipse-tractusx/tractusx-edc) |
+| IdentityHub / IssuerService | `v0.3.2` (EDC 0.16.0)   | **EDC 0.17.0 builds** from [tractusx-identityhub **PR #309**](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309) (kind-loaded, pullPolicy Never) |
 
 The 0.17.0 alignment is **required**, not cosmetic: EDC 0.17.0 / IH #937
 stopped base64url-decoding the `participantContextId` in credential-service URL
@@ -219,8 +251,11 @@ pull fires and succeeds. Two of our own configuration defects were the blockers:
 ### What's left
 
 1. **Version release dependency (the blocker to a shippable PR).** The working
-   stack needs published artifacts: `tractusx-edc 0.13.0` final (EDC 0.17.0) and
-   an IdentityHub/IssuerService 0.17.0 release (PR #308 merged + released). Until
+   stack is built from source — the connector from `tractusx-edc` **main** (EDC
+   0.17.0) and IdentityHub/IssuerService from
+   [tractusx-identityhub **PR #309**](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309).
+   It needs published artifacts: `tractusx-edc 0.13.0` final (EDC 0.17.0) and an
+   IdentityHub/IssuerService 0.17.0 release (PR #309 merged + released). Until
    then the committed pins (`0.13.0-rc2` / `v0.3.2`) produce the *non-working*
    0.16.0 bundle. Bump the pins in
    [`charts/dataspace-connector-bundle/Chart.yaml`](../../charts/dataspace-connector-bundle/Chart.yaml)

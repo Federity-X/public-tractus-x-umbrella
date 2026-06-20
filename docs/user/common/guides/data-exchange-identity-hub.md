@@ -53,13 +53,17 @@ The full DCP exchange requires the **EDC 0.17.0-aligned** stack:
 | `tractusx-connector`     | `0.13.0` (EDC 0.17.0)      | catalog-time credential presentation; EDC 0.17.0 uses the **plain** `participantContextId` in URLs |
 | IdentityHub / IssuerService | `0.17.0`                | matching plain-`participantContextId` credential-service routing (IH #937)                         |
 
-At the time of writing those are not yet on a public release channel, so the
-bundle `Chart.yaml`s still pin the 0.16.0 line (`tractusx-connector:0.13.0-rc2`,
-IH/IS `v0.3.2`). To run the validated flow today, layer the local-image overlay
+At the time of writing those are not yet on a public release channel, so they
+are **built from source** and the bundle `Chart.yaml`s still pin the 0.16.0 line
+(`tractusx-connector:0.13.0-rc2`, IH/IS `v0.3.2`):
+
+- the connector control/data-plane images are built from [`tractusx-edc` **main**](https://github.com/eclipse-tractusx/tractusx-edc) (EDC 0.17.0, tagged `0.13.0-SNAPSHOT`);
+- the IdentityHub + IssuerService images are built from [tractusx-identityhub **PR #309**](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309) (the EDC 0.17.0 upgrade).
+
+To run the validated flow today, layer the local-image overlay
 [`values-test-data-exchange-identity-hub-local-0.17.0.yaml`](../../../../charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml),
-which pins the EDC-0.17.0 connector snapshot and the IdentityHub/IssuerService
-0.17.0 builds. Those images must be **pre-loaded into the cluster** (they are
-not on a public registry) — e.g. for kind:
+which pins those images. They must be **pre-loaded into the cluster** (not on a
+public registry) — e.g. for kind:
 
 ```bash
 kind load docker-image \
