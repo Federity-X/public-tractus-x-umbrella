@@ -58,7 +58,7 @@ Four reusable capability bundles sit in `charts/` alongside the umbrella:
 
 | Bundle | Path | Composes |
 |--------|------|----------|
-| `dataspace-connector-bundle` | `charts/dataspace-connector-bundle/` | tractusx-connector (0.11.2), postgresql (15.2.1), vault (0.27.0) |
+| `dataspace-connector-bundle` | `charts/dataspace-connector-bundle/` | tractusx-connector (0.13.0-rc2), postgresql (15.2.1), vault (0.27.0) |
 | `digital-twin-bundle` | `charts/digital-twin-bundle/` | digital-twin-registry, postgresql |
 | `data-persistence-layer-bundle` | `charts/data-persistence-layer-bundle/` | simple-data-backend |
 | `identity-and-trust-bundle` | `charts/identity-and-trust-bundle/` | ssi-dim-wallet-stub, postgresql |
@@ -352,6 +352,8 @@ identity-hub:
 ### Step 3: Update Cross-Service References
 
 If Identity Hub replaces the SSI DIM Wallet Stub, update all references in `values.yaml`:
+
+> **Note (2026-06):** ready-made profiles now ship this — `charts/values-test-data-exchange-identity-hub*.yaml` (shared / per-participant / postgres). They use the connector's DCP-native `dcp:` / `sts.div` / `participant.*` schema (with `TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL` and a plain `participant.contextId`), **not** the legacy `iatp` keys shown below. The `iatp` snippet here is illustrative of the stub's legacy schema; prefer the shipped profiles + see `docs/user/common/guides/data-exchange-identity-hub.md`.
 
 ```yaml
 # EDC connectors — update IATP STS/OAuth endpoints:

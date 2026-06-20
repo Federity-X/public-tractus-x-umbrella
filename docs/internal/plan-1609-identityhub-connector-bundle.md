@@ -4,8 +4,64 @@
 > **Milestone:** Tractus-X 26.06
 > **Labels:** `tractusx-edc`, `tractusx-identityhub`, `tractus-x-umbrella`, `Prep-R26.06`
 > **Owner (us):** @wahidulazam (contributor); committers: @matbmoser, @CDiezRodriguez, @mgarciaLKS
-> **Status of this plan:** **2026-06-19 — TEST CASE 1 PASSES.** Full DCP data-exchange (catalog → negotiation → transfer → fetch) validated end-to-end on the shared-IdentityHub profile, including on the **stock** connector image. See **§0.1** for the authoritative current standing — it supersedes the gaps (G1–G6), runtime assumptions (§11.4 R1–R3), Definition of Done (§8) and most version facts below.
-> **Re-plan history:** 2026-06-18 — latest-component check + per-participant feasibility (**§0.0**). 2026-04-19 draft v3 — D10 resolved (postgres IssuerService); see `docs/common/concept/1609-local-test-findings.md#phase-11`.
+> **Status of this plan:** **2026-06-20 — ALL #1609 VALIDATION STEPS COMPLETE.** Full DCP data-exchange (catalog → negotiation → transfer → fetch) validated end-to-end on **all three** IdentityHub profiles (shared, per-participant, persistent/postgres). See **§0.2** for the authoritative current standing (it supersedes the "What's left" / G2 items in §0.1; §0.1 in turn supersedes the gaps/DoD/version facts further below).
+> **Re-plan history:** 2026-06-19 — Test Case 1 passes on the shared profile (**§0.1**). 2026-06-18 — latest-component check + per-participant feasibility (**§0.0**). 2026-04-19 draft v3 — D10 resolved (postgres IssuerService); see `docs/common/concept/1609-local-test-findings.md#phase-11`.
+
+---
+
+## 0.2 — 2026-06-20 update: all validation steps complete (authoritative)
+
+**Supersedes the "What's left" list and the G2 gap row in §0.1.** Since §0.1 the
+remaining validation was completed and a third IdentityHub variant was added.
+The full DCP data transfer (catalog → contract negotiation → transfer → fetch)
+is now validated end-to-end on **all three** IdentityHub profiles:
+
+| Profile (`-f charts/…`)                                       | Topology / store                  | Validated                                   |
+| ------------------------------------------------------------- | --------------------------------- | ------------------------------------------- |
+| `values-test-data-exchange-identity-hub.yaml`                 | shared in-memory IH               | ✅ clean `helm install` from scratch        |
+| `values-test-data-exchange-identity-hub-per-participant.yaml` | one in-memory IH per BPN (4 IHs)  | ✅ provider↔consumer1, each on its own IH   |
+| `values-test-data-exchange-identity-hub-postgres.yaml` (NEW)  | persistent IH (PostgreSQL)        | ✅ full transfer                            |
+
+All three run on the EDC-0.17.0-aligned stack via the new image overlay
+`values-test-data-exchange-identity-hub-local-0.17.0.yaml` (see §0.1 for the
+version gap — the committed `Chart.yaml`s still pin the 0.16.0 line).
+
+**Done since §0.1:**
+
+1. **Clean fresh-install proof** — full transfer green from `helm install` (no
+   kubectl patching). Required encoding the working config into the profile:
+   PLAIN `participantContextId` + the EDC-0.17.0 `TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL`
+   (was base64 / the legacy `TX_IAM_IATP_…` name).
+2. **Per-participant topology (G2) — DONE** (was "follow-up" in §0.1). Four
+   IdentityHub JVMs fit at ~68% memory on a 7.65 GiB kind node; transfer green.
+3. **Persistent (postgres) IdentityHub — NEW + DONE.** Added `tractusx-identityhub`
+   (alias `identity-hub-postgres`) as a third mutually-exclusive wallet
+   (`_wallet-validate.tpl` is now 3-way: stub | identity-hub | identity-hub-postgres).
+   Four postgres-variant fixes: the postgres **label clash** with
+   `dataprovider-digital-twin-db` (`postgresql.nameOverride` + jdbcUrl); the
+   seed's readiness-wait **pod label**; the IH's different **port layout**
+   (identity 8082 / credentials 8083 / did 8084); and — the real blocker — a
+   **non-unique `holderPid`** in the seed's credential request. `holderPid` is
+   the PRIMARY KEY of the IdentityHub holder-credential-request store; the seed
+   sent a constant (`= issuer DID`) for every participant, so on the persistent
+   store only the first holder's request inserted and the rest hit a PK
+   collision and never issued (the in-memory store tolerated it — a latent bug).
+   Fixed with a unique `holderPid` per request: a general seed correctness fix
+   that benefits every profile.
+4. **Deploy-guide refresh (G6) — DONE.** `docs/user/common/guides/data-exchange-identity-hub.md`
+   rewritten for the three profiles, the 0.17.0 stack and the smoke test.
+5. **Committed** — `c9e3e2d` (feature) + `659325c` (this plan). Single-author,
+   DCO sign-off, no AI attribution; `CLAUDE.md` excluded.
+
+Also hardened since §0.1: the BDRS directory-seeding hook now runs on
+`post-upgrade` too, and `hack/dcp-data-transfer-smoke.sh` self-warms the
+cold-BDRS-cache first-transfer race (re-negotiates once).
+
+**Only item still open (gated on upstream releases, not on us):** bump the
+bundle `Chart.yaml` pins to `tractusx-connector 0.13.0` (EDC 0.17.0) +
+IdentityHub/IssuerService 0.17.0 once published, then delete the `-local-0.17.0`
+overlay. (Optional: persist the postgres IH's key vault; harden the in-memory
+BDRS against restarts.)
 
 ---
 
@@ -187,6 +243,8 @@ pull fires and succeeds. Two of our own configuration defects were the blockers:
    persistent BDRS variant or a self-healing re-seed would harden it.
 
 ---
+
+> **⚠️ Everything from §0 onwards is the ORIGINAL plan (2026-04 → 2026-06-18), kept for history.** Where it conflicts with §0.1 / §0.2 above — e.g. `tractusx-connector 0.11.2` + the `iatp` / `sts.dim` schema (now `0.13.0-rc2`, DCP-native, `dcp` keys), "shared-only / per-participant deferred to 26.09" (per-participant + postgres are done), or "Test Case 1 unproven" (it passes) — **§0.1 / §0.2 are authoritative.**
 
 ## 0. TL;DR — Is umbrella-only sufficient?
 

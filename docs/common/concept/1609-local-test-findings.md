@@ -1,5 +1,19 @@
 # #1609 Phase 9 — Local Deploy & Test Findings
 
+> **⚠️ HISTORICAL (Phase 9, 2026-06) — superseded; see the plan §0.2.** This log
+> records the Phase 9 *seed / provisioning* validation and its 9 defects. It
+> **predates the full DCP data-transfer breakthrough.** Since then the complete
+> flow (catalog → negotiation → transfer → fetch) has been validated end-to-end
+> on the shared, per-participant and persistent/postgres IdentityHub profiles,
+> after further fixes: credential-claim enrichment so the cx-policy constraints
+> are satisfiable (`BpnCredential.bpn`, `DataExchangeGovernanceCredential.contractVersion`),
+> plain `participantContextId`, a unique per-request `holderPid`, BDRS directory
+> seeding, and the postgres-IH variant. The connector is now `0.13.0-rc2`
+> (DCP-native), validated on the EDC-0.17.0 stack — so references below to
+> `0.11.2` / `iatp` / "issuance not available end-to-end" are stale. For the
+> current standing see `docs/internal/plan-1609-identityhub-connector-bundle.md`
+> §0.2 and `docs/user/common/guides/data-exchange-identity-hub.md`.
+
 _Ran on macOS + kind (`kind-umbrella-1609`, K8s v1.35.0) against
 `charts/identity-and-trust-bundle` (IH + IS memory, no stub) + the
 Phase B seeding Job rendered standalone from `charts/tx-data-provider`._
