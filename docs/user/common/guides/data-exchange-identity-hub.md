@@ -32,7 +32,7 @@ wallet implementation for the entire data-exchange subset. Within
 | ----------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------- |
 | `values-test-data-exchange.yaml` (default)                  | `ssi-dim-wallet-stub`                         | stub, no DCP seeding                              |
 | `values-test-data-exchange-identity-hub.yaml`               | `tractusx-identityhub-memory` (`identity-hub`)| **shared** in-memory IH (one multi-tenant host)   |
-| `values-test-data-exchange-identity-hub-per-participant.yaml`| `tractusx-identityhub-memory` ×4              | **per-participant** — one in-memory IH per BPN    |
+| `values-test-data-exchange-identity-hub-per-participant.yaml`| `tractusx-identityhub-memory` ×2              | **per-participant** — provider + consumer1, each on its own IH |
 | `values-test-data-exchange-identity-hub-postgres.yaml`      | `tractusx-identityhub` (`identity-hub-postgres`)| **persistent** IH backed by PostgreSQL          |
 
 All three identityHub profiles share one IssuerService (`tractusx-issuerservice`,
@@ -187,13 +187,13 @@ topologies. The `-local-0.17.0` overlay applies to all three.
 kubectl -n umbrella logs job/umbrella-dataprovider-post-install-identityhub-seed | grep -A6 "SEED SUMMARY"
 # [ih-seed]  SEED SUMMARY: 4 participants provisioned successfully
 #   ...
-#   Credential issuance (§8/§9): 16 ISSUED, 0 NOT issued
+#   Credential issuance (steps 8/9): 16 ISSUED, 0 NOT issued
 #   All declared credentials reached ISSUED.
 ```
 
 The SEED SUMMARY now reports issuance **loudly**: it lists `N ISSUED, M NOT
 issued` and, if any are missing, prints each one as `*** PARTIAL ISSUANCE ***`.
-(`§8/§9` in the seed output are the credential *request* and *retrieve* steps of
+(steps 8 and 9 in the seed output are the credential *request* and *retrieve* steps of
 the upstream [DCP API walkthrough](https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/docs/usage/dcp-api-walkthrough).)
 Each of the four participants should hold four ISSUED credentials (16 total).
 Tuning knobs (under `wallet.identityHubSeed` / `wallet`):
@@ -325,6 +325,35 @@ credentials persist across IdentityHub pod restarts (see *Known limitations* L3)
 helm uninstall umbrella -n umbrella
 kubectl delete ns umbrella
 ```
+
+## Related documentation
+
+Everything that makes up the `wallet.mode=identityHub` data-exchange (this guide
+is the entry point):
+
+**Profiles** (`-f charts/…`, layered with the image overlay):
+
+- [Shared in-memory IdentityHub](../../../../charts/values-test-data-exchange-identity-hub.yaml) — `values-test-data-exchange-identity-hub.yaml`
+- [Per-participant (provider + consumer1)](../../../../charts/values-test-data-exchange-identity-hub-per-participant.yaml) — `…-per-participant.yaml`
+- [Persistent / PostgreSQL IdentityHub](../../../../charts/values-test-data-exchange-identity-hub-postgres.yaml) — `…-postgres.yaml`
+- [Local-image overlay (EDC-0.17.0 stack)](../../../../charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml) — `…-local-0.17.0.yaml`
+
+**Tooling and templates:**
+
+- [DCP data-transfer smoke test](../../../../hack/dcp-data-transfer-smoke.sh) — `hack/dcp-data-transfer-smoke.sh`
+- [IdentityHub seeding Job](../../../../charts/tx-data-provider/templates/post-install-identityhub-seed.yaml) — the DCP provisioning hook
+- [BDRS directory-seeding hook](../../../../charts/umbrella/templates/post-install-bdrs-setup.yaml)
+- Wallet helpers: [`_wallet-derive.tpl`](../../../../charts/umbrella/templates/_wallet-derive.tpl) (per-participant DIDs/URLs) · [`_wallet-validate.tpl`](../../../../charts/umbrella/templates/_wallet-validate.tpl) (wallet mutual-exclusion + image-overlay guard) · [`configmap-wallet-mode.yaml`](../../../../charts/umbrella/templates/configmap-wallet-mode.yaml) (derived wallet ConfigMap)
+
+**Background / concepts:**
+
+- [ECOSYSTEM-GUIDE.md](../../../../ECOSYSTEM-GUIDE.md) — DCP / `wallet.mode` concepts and the stub-vs-IdentityHub trust model
+
+**Internal working notes** (provenance only — not part of the user-facing deliverable, and partly historical):
+
+- [#1609 plan](../../../internal/plan-1609-identityhub-connector-bundle.md) — design rationale, version strategy, and PR-positioning note
+- [How the umbrella Helm charts work](../../../internal/how-tractus-x-umbrella-helm-charts-work.md) — chart composition reference
+- [Phase-9 local deploy & test findings](../../../common/concept/1609-local-test-findings.md) — historical defect log (superseded; see the plan)
 
 ## NOTICE
 

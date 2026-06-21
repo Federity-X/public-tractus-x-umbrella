@@ -1,6 +1,6 @@
 # #1609 Phase 9 — Local Deploy & Test Findings
 
-> **⚠️ HISTORICAL (Phase 9, 2026-06) — superseded; see the plan §0.2.** This log
+> **NOTE HISTORICAL (Phase 9, 2026-06) — superseded; see the plan section 0.2.** This log
 > records the Phase 9 *seed / provisioning* validation and its 9 defects. It
 > **predates the full DCP data-transfer breakthrough.** Since then the complete
 > flow (catalog → negotiation → transfer → fetch) has been validated end-to-end
@@ -14,7 +14,7 @@
 > IdentityHub/IssuerService `v0.3.2` (not `v0.2.0`), `identity-and-trust-bundle`
 > `1.2.0` (not `1.1.2`), `tx-data-provider` `0.5.0` (not `0.4.6`) — and
 > "issuance not available end-to-end" no longer holds. For the current standing
-> see `docs/internal/plan-1609-identityhub-connector-bundle.md` §0.2 and
+> see `docs/internal/plan-1609-identityhub-connector-bundle.md` section 0.2 and
 > `docs/user/common/guides/data-exchange-identity-hub.md`.
 
 _Ran on macOS + kind (`kind-umbrella-1609`, K8s v1.35.0) against
@@ -53,7 +53,7 @@ is now informed by what we actually saw.
 
 ## Defects found
 
-### ✅ D1 — IH crashlooped on boot (`StringIndexOutOfBoundsException`)
+### DONE D1 — IH crashlooped on boot (`StringIndexOutOfBoundsException`)
 
 * **Symptom:** IH pod CrashLoopBackOff at startup with
   `Range [0, -1) out of bounds for length 26` in
@@ -71,7 +71,7 @@ is now informed by what we actually saw.
   silence the `SuperUserSeedExtension` warning.
 * **File:** `charts/identity-and-trust-bundle/values.yaml`.
 
-### ✅ D2 — Ingress admission rejected `/.well-known/api`
+### DONE D2 — Ingress admission rejected `/.well-known/api`
 
 * **Symptom:** `helm install` failed with
   `spec.rules[…]path: Invalid value: "/.well-known/api": must be an
@@ -84,7 +84,7 @@ is now informed by what we actually saw.
   service-to-service health) but not ingressed.
 * **File:** `charts/identity-and-trust-bundle/values.yaml`.
 
-### ✅ D3 — Design flaw: seed Job used public ingress URLs for admin calls
+### DONE D3 — Design flaw: seed Job used public ingress URLs for admin calls
 
 * **Symptom (logical):** Admin traffic (create participant, issue
   credential) would have traversed the Kubernetes ingress, coupling the
@@ -100,7 +100,7 @@ is now informed by what we actually saw.
   `internal*Service` keys), `charts/umbrella/templates/configmap-wallet-mode.yaml`,
   `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`.
 
-### ✅ D4 — Wrong pod label selector in seed Job
+### DONE D4 — Wrong pod label selector in seed Job
 
 * **Symptom:** `error: no matching resources found` when the Job tried
   `kubectl wait --for=condition=Ready pod -l
@@ -112,7 +112,7 @@ is now informed by what we actually saw.
   `charts/tx-data-provider/values.yaml:identityHubSeed.{identityHubPodLabel,
   issuerServicePodLabel}`.
 
-### ✅ D5 — Super-user API key grep pattern didn't match real logs
+### DONE D5 — Super-user API key grep pattern didn't match real logs
 
 * **Symptom:** Seed Job reached `FATAL: could not extract super-user API
   key from pod …` after pods became Ready.
@@ -125,7 +125,7 @@ is now informed by what we actually saw.
   `Please take note of the API Key:[[:space:]]+[A-Za-z0-9+/=._-]+`.
 * **File:** `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`.
 
-### ❌→✅ D6 — IssuerService admin paths (3 root causes, all upstream-API drift)
+### FAIL→DONE D6 — IssuerService admin paths (3 root causes, all upstream-API drift)
 
 The original Job used `POST /api/admin/v1alpha/participants` to create
 the IssuerService participant context, which returned 404. Investigation
@@ -146,7 +146,7 @@ inline; without it, server returns 400. Also, the body schema's
 all subsequent calls, so the client must compute and reuse the encoded
 form.
 
-### ✅ D7 — base64 padding in path segments (latent bug in helper)
+### DONE D7 — base64 padding in path segments (latent bug in helper)
 
 The Phase A `umbrella.wallet.base64ParticipantId` helper used
 `trimSuffix "="` to strip base64 padding, which only removes ONE `=`.
@@ -156,7 +156,7 @@ ended up with one stray `=` in the URL path segment. Replaced with
 `replace "=" ""` which strips all padding (safe for base64 since `=`
 only ever appears as terminal padding).
 
-### ✅ D8 — Pre-flight liveness probe needed before first admin call
+### DONE D8 — Pre-flight liveness probe needed before first admin call
 
 Even after `kubectl wait --for=condition=Ready`, the
 `SuperUserSeedExtension` may need an extra moment to register the
@@ -166,7 +166,7 @@ key until it returns 200 before issuing any provisioning POSTs.
 Without this, the first call occasionally returned 401 with no
 useful error body.
 
-### ✅ D9 — IssuerService needs its OWN ParticipantContext bootstrapped first
+### DONE D9 — IssuerService needs its OWN ParticipantContext bootstrapped first
 
 The original script had no setup phase: it jumped straight into the
 per-participant loop and tried to register holders before the issuer
@@ -272,20 +272,20 @@ upstream extension is missing.
 
 | Step | Endpoint                                                                      | Result on kind                        |
 |------|-------------------------------------------------------------------------------|---------------------------------------|
-| §1   | IH `POST /api/identity/v1alpha/participants` (× 4 holders)                    | 409 idempotent (already exists)       |
-| §2   | IH `POST .../{ctx}/state?isActive=true`                                       | 204 OK                                |
-| §3   | IS `POST /api/admin/v1alpha/participants/{issuerCtx}/holders`                 | 201 OK (× 4)                          |
-| §4   | IS issuer ParticipantContext create + activate                                | 409 / 204 OK                          |
-| §5   | IS `POST .../attestations` (`attestationType: database`)                      | 400 WARN — upstream image lacks ext.  |
-| §6   | IS `POST .../credentialdefinitions` (× 3 unique types)                        | 400 WARN — depends on §5              |
-| §7   | implicit `holders` table populated by §5                                      | n/a (no §5 → no rows)                 |
-| §8   | IH `POST .../credentials/request` (× 12 = 4 holders × 3 types)                | 201 OK each                           |
-| §9   | IH `GET .../credentials` polled for `state==ISSUED`                           | WARN — never ISSUED (no §6 def)       |
+| step 1   | IH `POST /api/identity/v1alpha/participants` (× 4 holders)                    | 409 idempotent (already exists)       |
+| step 2   | IH `POST .../{ctx}/state?isActive=true`                                       | 204 OK                                |
+| step 3   | IS `POST /api/admin/v1alpha/participants/{issuerCtx}/holders`                 | 201 OK (× 4)                          |
+| step 4   | IS issuer ParticipantContext create + activate                                | 409 / 204 OK                          |
+| step 5   | IS `POST .../attestations` (`attestationType: database`)                      | 400 WARN — upstream image lacks ext.  |
+| step 6   | IS `POST .../credentialdefinitions` (× 3 unique types)                        | 400 WARN — depends on step 5              |
+| step 7   | implicit `holders` table populated by step 5                                      | n/a (no step 5 → no rows)                 |
+| step 8   | IH `POST .../credentials/request` (× 12 = 4 holders × 3 types)                | 201 OK each                           |
+| step 9   | IH `GET .../credentials` polled for `state==ISSUED`                           | WARN — never ISSUED (no step 6 def)       |
 
 ### D10 — `database` attestation extension is not in the upstream image
 
 `tractusx-issuerservice-memory:0.2.0` does not bundle the
-`issuance-database-attestation` runtime extension that walkthrough §05
+`issuance-database-attestation` runtime extension that walkthrough step 05
 assumes. Upstream's bruno collection works against a custom build that
 includes it. On vanilla kind:
 
@@ -294,31 +294,31 @@ includes it. On vanilla kind:
   "type":"InvalidRequest","path":null,"invalidValue":null}]
 ```
 
-**Resolution:** marked §5/§6/§8/§9 as `post_softfail` so the Job emits
+**Resolution:** marked step 5/step 6/step 8/step 9 as `post_softfail` so the Job emits
 clear WARN lines and continues. When operators install the missing
 extension (or upstream bundles it in a future tag), no template change
 is needed — the Job will start succeeding silently.
 
 ### D11 — Holder `holderId` must be the BPN, not the slug
 
-§3 holder-registration body originally sent `holderId: "$PART_ID"`
+step 3 holder-registration body originally sent `holderId: "$PART_ID"`
 (slug like `consumer-bpnl00000003azqp`). Catena-X policy frameworks
 expect `credentialSubject.holderIdentifier` to equal the BPN
 (`BPNL00000003AZQP`). Fixed in `41977c1` by mapping `holder_id` →
-`$BPN` and adjusting the `mappings[].input` in §6 accordingly.
+`$BPN` and adjusting the `mappings[].input` in step 6 accordingly.
 
 ### Definition of Done
 
 | #1609 plan item                                                            | Status                                              |
 |----------------------------------------------------------------------------|-----------------------------------------------------|
-| Single source of truth for participants + DIDs (`wallet.participants`)     | ✅ commit `5ec5cdb`                                 |
-| Seed Job creates ParticipantContexts on IH                                 | ✅ commit `2fdac40`                                 |
-| Seed Job registers holders on IS                                           | ✅ commit `2fdac40`                                 |
-| Seed Job exercises §5/§6/§8/§9                                             | ✅ commit `41977c1` (best-effort)                   |
-| Connector profile wired to IH STS / IH credentials                         | ✅ already in `values-test-data-exchange-identity-hub.yaml` |
-| BDRS re-seeded with IH-hosted DIDs                                         | ✅ same file                                        |
-| Test Case 1 (data exchange) end-to-end pass                                | 🟡 blocked by D10 — VC issuance unavailable until extension is bundled |
-| Deploy guide for the IH profile                                            | ✅ `docs/user/common/guides/data-exchange-identity-hub.md` |
+| Single source of truth for participants + DIDs (`wallet.participants`)     | DONE commit `5ec5cdb`                                 |
+| Seed Job creates ParticipantContexts on IH                                 | DONE commit `2fdac40`                                 |
+| Seed Job registers holders on IS                                           | DONE commit `2fdac40`                                 |
+| Seed Job exercises step 5/step 6/step 8/step 9                                             | DONE commit `41977c1` (best-effort)                   |
+| Connector profile wired to IH STS / IH credentials                         | DONE already in `values-test-data-exchange-identity-hub.yaml` |
+| BDRS re-seeded with IH-hosted DIDs                                         | DONE same file                                        |
+| Test Case 1 (data exchange) end-to-end pass                                | PARTIAL blocked by D10 — VC issuance unavailable until extension is bundled |
+| Deploy guide for the IH profile                                            | DONE `docs/user/common/guides/data-exchange-identity-hub.md` |
 
 ### Recommended follow-ups (separate issues)
 
@@ -352,31 +352,31 @@ variant to the **postgres** variant, which bundles the upstream
 
 | Step | Before (Phase 10)                               | After (Phase 11)              |
 |------|-------------------------------------------------|-------------------------------|
-| §5   | `WARN 400 Unknown attestation type: database`   | **`OK (201)`** ✅             |
-| §6   | `WARN 400 Attestation definitions … not found`  | **`OK (201)` × 3 defs** ✅    |
-| §8   | `OK (201)` × 12                                 | `OK (201)` × 12 (unchanged)   |
-| §9   | WARN never ISSUED                               | WARN never ISSUED (unchanged) |
+| step 5   | `WARN 400 Unknown attestation type: database`   | **`OK (201)`** DONE             |
+| step 6   | `WARN 400 Attestation definitions … not found`  | **`OK (201)` × 3 defs** DONE    |
+| step 8   | `OK (201)` × 12                                 | `OK (201)` × 12 (unchanged)   |
+| step 9   | WARN never ISSUED                               | WARN never ISSUED (unchanged) |
 
-§5/§6 are now **strict** (`post_idem`, not `post_softfail`). The §9
+step 5/step 6 are now **strict** (`post_idem`, not `post_softfail`). The step 9
 "never ISSUED" is a separate DCP lifecycle concern unrelated to D10 —
 noted as a follow-up below.
 
-### ✅ D10 (resolved) — `database` attestation now available
+### DONE D10 (resolved) — `database` attestation now available
 
 * **Root cause:** confirmed — `tractusx-issuerservice-memory` image
   only registers the `presentation` attestation factory. The postgres
   image (`tractusx-issuerservice`) additionally bundles
   `issuerservice-database-attestations`, which registers the `database`
-  factory required by §5.
+  factory required by step 5.
 * **Fix:** `charts/identity-and-trust-bundle/Chart.yaml` — swap the
   dependency `tractusx-issuerservice-memory` → `tractusx-issuerservice`
   (still v0.2.0, same alias `issuer-service`). The postgres chart bundles
   its own ephemeral postgres + vault (dev mode) subcharts, so no external
   infra is required for kind.
 * **Seed-Job side:** `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`
-  — §5 and §6 demoted from `post_softfail` back to `post_idem` (strict).
+  — step 5 and step 6 demoted from `post_softfail` back to `post_idem` (strict).
 
-### ✅ D12 — Cached `tx-data-provider-0.4.6.tgz` missing sub-subcharts
+### DONE D12 — Cached `tx-data-provider-0.4.6.tgz` missing sub-subcharts
 
 * **Symptom:** `wget: bad address 'umbrella-edc-dataconsumer-1-vault:8200'`
   during dataconsumer vault-setup Job.
@@ -388,7 +388,7 @@ noted as a follow-up below.
   `tx-data-provider`, then `helm package tx-data-provider -d charts/umbrella/charts/`.
   Tarball grew 30KB → 575KB. Should be scripted in `hack/helm-dependencies.bash`.
 
-### ✅ D13 — IssuerService pod liveness probe too tight
+### DONE D13 — IssuerService pod liveness probe too tight
 
 * **Symptom:** `umbrella-issuer-service` CrashLoopBackOff with `Exit 143`
   (SIGTERM) ~35s after start. All extensions logged `Started` but the
@@ -403,7 +403,7 @@ noted as a follow-up below.
   failureThreshold=6`.
 * **File:** `charts/identity-and-trust-bundle/values.yaml`.
 
-### ✅ D14 — Postgres `Service` label clash with `dataprovider-digital-twin-db`
+### DONE D14 — Postgres `Service` label clash with `dataprovider-digital-twin-db`
 
 * **Symptom:** IS pod booted, then immediately logged
   `FATAL: database "issuer" does not exist` on every JDBC connection.
@@ -426,7 +426,7 @@ noted as a follow-up below.
   `jdbc:postgresql://umbrella-issuer-postgresql:5432/issuer` before install.
 * **File:** `charts/identity-and-trust-bundle/values.yaml`.
 
-### ✅ D15 — Identity Hub pod liveness probe too tight (same class as D13)
+### DONE D15 — Identity Hub pod liveness probe too tight (same class as D13)
 
 * **Symptom:** `umbrella-identity-hub` CrashLoopBackOff after all extensions
   logged `Started`; `kubectl describe` → `Liveness probe failed: connection
@@ -443,22 +443,22 @@ noted as a follow-up below.
 
 | #1609 plan item                                                            | Status            |
 |----------------------------------------------------------------------------|-------------------|
-| Seed Job §5 (IS attestation) succeeds                                      | ✅ `OK (201)`     |
-| Seed Job §6 (IS credentialdefinitions × 3) succeeds                        | ✅ `OK (201)` × 3 |
-| IS pod reaches `1/1 Running` on a full umbrella kind install               | ✅                |
-| IH pod reaches `1/1 Running` on a full umbrella kind install               | ✅                |
-| IS-bundled postgres isolated from digital-twin-db                          | ✅ D14            |
-| Test Case 1 (data exchange) end-to-end pass                                | 🟡 §9 ISSUED lifecycle still a follow-up (unrelated to D10) |
+| Seed Job step 5 (IS attestation) succeeds                                      | DONE `OK (201)`     |
+| Seed Job step 6 (IS credentialdefinitions × 3) succeeds                        | DONE `OK (201)` × 3 |
+| IS pod reaches `1/1 Running` on a full umbrella kind install               | DONE                |
+| IH pod reaches `1/1 Running` on a full umbrella kind install               | DONE                |
+| IS-bundled postgres isolated from digital-twin-db                          | DONE D14            |
+| Test Case 1 (data exchange) end-to-end pass                                | PARTIAL step 9 ISSUED lifecycle still a follow-up (unrelated to D10) |
 
 ### Remaining follow-up (unrelated to #1609 scope)
 
-**§9 credential never reaches `ISSUED` state.** §8 returns `201` for all
+**step 9 credential never reaches `ISSUED` state.** step 8 returns `201` for all
 12 `POST .../credentials/request` calls, but subsequent `GET .../credentials`
 polling never shows `state == ISSUED`. This is the DCP credential-issuance
 loop between IH and IS — distinct from D10 (attestation/credentialdef
 registration) and more likely a `did:web` resolution or STS keying issue
 inside the cluster's DNS. Should be filed as a separate umbrella issue
-because #1609's acceptance criteria (§1–§7) are now met.
+because #1609's acceptance criteria (step 1–step 7) are now met.
 
 ### Phase 11 files changed
 
@@ -466,7 +466,7 @@ because #1609's acceptance criteria (§1–§7) are now met.
 |----------------------------------------------------------|-----------------|
 | `charts/identity-and-trust-bundle/Chart.yaml`            | D10             |
 | `charts/identity-and-trust-bundle/values.yaml`           | D10, D13, D14, D15 |
-| `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml` | D10 (§5/§6 strict) |
+| `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml` | D10 (step 5/step 6 strict) |
 | `charts/values-test-data-exchange-identity-hub.yaml`     | D10 (comment)   |
 | `charts/umbrella/charts/tx-data-provider-0.4.6.tgz`      | D12 (repackaged)|
 | `charts/umbrella/charts/identity-and-trust-bundle-1.1.2.tgz` | D10, D13, D14, D15 (repackaged) |

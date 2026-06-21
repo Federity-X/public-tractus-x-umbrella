@@ -298,7 +298,7 @@ Identity has three supporting components:
 
 Use this generic checklist when integrating **any** new component. (It predates
 #1609 and uses Identity Hub only as a worked example; the IdentityHub now ships
-inside `identity-and-trust-bundle` and is selected by `wallet.mode` — see §4 —
+inside `identity-and-trust-bundle` and is selected by `wallet.mode` — see section 4 —
 not by a top-level `identity-hub.enabled` flag.)
 
 ### Step 1: Add Dependency in Chart.yaml

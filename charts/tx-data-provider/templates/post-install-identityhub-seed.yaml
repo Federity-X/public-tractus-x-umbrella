@@ -63,7 +63,7 @@
    Job failure. The per-credential poll window is configurable via
    `wallet.identityHubSeed.credentialPollTimeoutSeconds` (default 120s) — the
    postgres IssuerService issues more slowly than the in-memory one. The
-   `database` attestation in §5 is now reliable because we deploy the
+   `database` attestation in step 5 is now reliable because we deploy the
    upstream **postgres** IssuerService image (`tractusx-issuerservice`),
    which bundles the `issuerservice-database-attestations` extension; the
    memory image does not.
@@ -342,7 +342,7 @@ spec:
               # inline (JsonWebKey2020 / EC P-256 — the default suite the
               # rest of the umbrella stack expects), and a `serviceEndpoints`
               # array so the resulting did:web document advertises the
-              # right service entry (per upstream walkthrough §02).
+              # right service entry (per upstream walkthrough step 02).
               #
               # Args: pid did role srvType srvUrl
               #   srvType: "CredentialService" (holder) | "IssuerService" (issuer)
@@ -490,7 +490,7 @@ spec:
 
               ########################################################
               # SETUP step 5: create one shared `holders` attestation.
-              # Per upstream walkthrough §05 the IssuerService ships a
+              # Per upstream walkthrough step 05 the IssuerService ships a
               # `database` attestation that reads the `holders` table
               # populated by step 7. One attestation is sufficient for
               # all credential types because the `mappings` block on
@@ -521,7 +521,7 @@ spec:
                 "$IS_ISSUERADMIN/v1alpha/participants/$ISSUER_PID_B64/attestations" \
                 "$IS_KEY" \
                 "$ATTESTATION_BODY" \
-                "(setup §5) IS attestation"
+                "(setup step 5) IS attestation"
 
               ########################################################
               # SETUP step 5b: create a `holder` attestation. Unlike the
@@ -550,7 +550,7 @@ spec:
                 "$IS_ISSUERADMIN/v1alpha/participants/$ISSUER_PID_B64/attestations" \
                 "$IS_KEY" \
                 "$HOLDER_ATTESTATION_BODY" \
-                "(setup §5b) IS holder attestation"
+                "(setup step 5b) IS holder attestation"
 
               ########################################################
               # SETUP step 6: create one CredentialDefinition per unique
@@ -587,12 +587,12 @@ spec:
               }
               JSON
               )
-                # Strict: depends on §5 attestation, which is now strict.
+                # Strict: depends on step 5 attestation, which is now strict.
                 post_idem \
                   "$IS_ISSUERADMIN/v1alpha/participants/$ISSUER_PID_B64/credentialdefinitions" \
                   "$IS_KEY" \
                   "$CRED_DEF_BODY" \
-                  "(setup §6) IS credentialdefinition $CRED_TYPE → $CRED_ID"
+                  "(setup step 6) IS credentialdefinition $CRED_TYPE → $CRED_ID"
               done
 
               ########################################################
@@ -654,7 +654,7 @@ spec:
                 ######################################################
                 # (A) Create holder ParticipantContext on IH with
                 #     inline keypair generation + CredentialService
-                #     serviceEndpoint (per walkthrough §02).
+                #     serviceEndpoint (per walkthrough step 02).
                 ######################################################
                 HOLDER_CS_URL="$CUR_IH_CREDENTIALS/v1/participants/$PART_B64"
                 IH_BODY=$(build_ctx_body \
@@ -739,8 +739,8 @@ spec:
                 ######################################################
                 # (D) Best-effort: trigger DCP issuance for each
                 #     credential declared on this participant
-                #     (walkthrough §08), then poll the holder's
-                #     credential store (§09) until the credential
+                #     (walkthrough step 08), then poll the holder's
+                #     credential store (step 09) until the credential
                 #     turns up in state ISSUED.
                 #
                 #     Failures here do NOT fail the Job — DCP
@@ -779,7 +779,7 @@ spec:
                        "$CUR_IH_IDENTITY/v1alpha/participants/$PART_B64/credentials/request" \
                        "$CUR_IH_KEY" \
                        "$REQ_BODY" \
-                       "(D §8) IH request $CRED_TYPE for $PID"; then
+                       "(D step 8) IH request $CRED_TYPE for $PID"; then
                     # Poll IH for the credential to appear in state ISSUED.
                     # EDC 0.16.0 (IH v0.3.2) changes the credentials API:
                     #   * `.state` is now the numeric VcStatus code (500 = ISSUED),
@@ -800,7 +800,7 @@ spec:
                               and (.state == 500 or .state == "ISSUED")
                             )' \
                            >/dev/null 2>&1; then
-                        echo "[ih-seed] (D §9) $CRED_TYPE ISSUED for $PID (attempt $j)"
+                        echo "[ih-seed] (D step 9) $CRED_TYPE ISSUED for $PID (attempt $j)"
                         echo "OK $PID $CRED_TYPE" >> "$ISSUANCE_LOG"
                         ok=1
                         break
@@ -808,7 +808,7 @@ spec:
                       sleep 2
                     done
                     if [ "$ok" = "0" ]; then
-                      echo "[ih-seed] (D §9) WARN: $CRED_TYPE never reached ISSUED for $PID after ${CRED_POLL_TIMEOUT}s"
+                      echo "[ih-seed] (D step 9) WARN: $CRED_TYPE never reached ISSUED for $PID after ${CRED_POLL_TIMEOUT}s"
                       echo "WARN $PID $CRED_TYPE (never reached ISSUED within ${CRED_POLL_TIMEOUT}s)" >> "$ISSUANCE_LOG"
                     fi
                   else
@@ -837,7 +837,7 @@ spec:
               echo "[ih-seed]  SEED SUMMARY: $PCOUNT participants provisioned successfully"
               echo "[ih-seed]  (issuer=$ISSUER_PID activated, all holders created+activated+registered)"
               echo "[ih-seed]  credentialDefinitions configured: $CTYPES"
-              echo "[ih-seed]  Credential issuance (§8/§9): ${ISSUED_OK} ISSUED, ${ISSUED_WARN} NOT issued"
+              echo "[ih-seed]  Credential issuance (steps 8/9): ${ISSUED_OK} ISSUED, ${ISSUED_WARN} NOT issued"
               if [ "$ISSUED_WARN" -gt 0 ]; then
                 echo "[ih-seed]  *** PARTIAL ISSUANCE — ${ISSUED_WARN} credential(s) did not reach ISSUED: ***"
                 grep '^WARN ' "$ISSUANCE_LOG" | sed 's/^WARN /[ih-seed]    - /'

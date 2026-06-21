@@ -16,6 +16,7 @@ The following table links you to the respective documentations.
     - [Data Exchange](user/common/guides/data-exchange.md)
       - [Data Provider](user/common/guides/data-exchange/provide-data.md)
       - [Data Consumer](user/common/guides/data-exchange/consume-data.md)
+    - [Data Exchange with Real IdentityHub](user/common/guides/data-exchange-identity-hub.md)
     - [Portal Usage](user/common/guides/portal-usage.md)
     - [Database Access](user/common/guides/database-access.md)
     - [Observability](user/common/guides/observability/observability.md)

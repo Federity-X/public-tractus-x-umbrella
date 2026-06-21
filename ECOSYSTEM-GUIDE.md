@@ -397,7 +397,7 @@ Step 5: Contract negotiation proceeds
 Each EDC connector is configured as below. The connector pinned in this umbrella
 is now `0.13.0-rc2` (DCP-native). The example shows the **stub** profile, which
 still carries the legacy `iatp:` / `sts.dim` schema; the **identityHub** profiles
-use the first-class `dcp:` / `sts.div` keys (see §7.y):
+use the first-class `dcp:` / `sts.div` keys (see section 7.y):
 
 ```yaml
 participant:
