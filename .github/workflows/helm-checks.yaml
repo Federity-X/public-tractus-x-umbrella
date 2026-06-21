@@ -327,6 +327,70 @@ jobs:
     #    helm dependency update charts/[CHART]
     #    helm upgrade [NAME] charts/[CHART]
 
+  # ---------------------------------------------------------------------------
+  # IdentityHub (wallet.mode=identityHub) profiles — TEMPLATE-RENDER ONLY.
+  #
+  # These three profiles cannot be `helm install`ed in CI: the validated DCP
+  # data-transfer flow needs the EDC-0.17.0-aligned connector + IdentityHub /
+  # IssuerService images, which are built from source (tractusx-edc main +
+  # tractusx-identityhub PR #309) and are NOT on a public registry — see
+  # docs/user/common/guides/data-exchange-identity-hub.md. Until those are
+  # released, this job renders each profile (with the local-image overlay that
+  # carries the `wallet.identityHub.imagesOverridden` sentinel) to guard the
+  # wallet validator, the per-participant DID/URL derivation and the seed Job
+  # template against regressions, plus asserts the version-mismatch guard fires
+  # when the overlay is absent.
+  # ---------------------------------------------------------------------------
+  template-identity-hub:
+    runs-on: ubuntu-latest
+    needs: [list-changed]
+    if: ${{ github.event_name != 'pull_request' || needs.list-changed.outputs.changed == 'true' }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Helm
+      uses: azure/setup-helm@b7246b12e77f7134dc2d460a3d5bad15bbe29390 # v4.1.0
+      with:
+        version: ${{ github.event.inputs.helm_version || 'latest' }}
+
+    - name: Download chart dependencies (recursive)
+      run: bash hack/helm-dependencies.bash
+
+    - name: Render identityHub profiles (with local-image overlay)
+      run: |
+        set -o pipefail
+        overlay=charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml
+        for profile in \
+          charts/values-test-data-exchange-identity-hub.yaml \
+          charts/values-test-data-exchange-identity-hub-per-participant.yaml \
+          charts/values-test-data-exchange-identity-hub-postgres.yaml; do
+          echo "--- helm template $profile (+ overlay) ---"
+          helm template umbrella charts/umbrella \
+            -f "$profile" -f "$overlay" > /dev/null
+        done
+
+    - name: Assert version-mismatch guard fires without the overlay
+      run: |
+        # Render WITHOUT the overlay; it must fail, AND the failure must be the
+        # image-overlay guard specifically — otherwise an unrelated template
+        # regression could masquerade as "guard fired" and hide a real break.
+        err=$(helm template umbrella charts/umbrella \
+                -f charts/values-test-data-exchange-identity-hub.yaml 2>&1 >/dev/null) && rc=0 || rc=$?
+        if [ "${rc:-0}" = "0" ]; then
+          echo "ERROR: identityHub profile rendered WITHOUT the local-image overlay —" >&2
+          echo "       the wallet.identityHub.imagesOverridden guard did not fire." >&2
+          exit 1
+        fi
+        if ! printf '%s' "$err" | grep -q -e 'imagesOverridden' -e 'EDC-0.17.0-aligned images'; then
+          echo "ERROR: render failed, but NOT via the image-overlay guard (possible template regression):" >&2
+          printf '%s\n' "$err" >&2
+          exit 1
+        fi
+        echo "OK: render fails without the overlay via the image-overlay guard, as expected."
+
   #kyverno:
   #  runs-on: ubuntu-latest
   #  needs: [list-changed]
