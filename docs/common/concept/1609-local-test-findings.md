@@ -8,11 +8,14 @@
 > after further fixes: credential-claim enrichment so the cx-policy constraints
 > are satisfiable (`BpnCredential.bpn`, `DataExchangeGovernanceCredential.contractVersion`),
 > plain `participantContextId`, a unique per-request `holderPid`, BDRS directory
-> seeding, and the postgres-IH variant. The connector is now `0.13.0-rc2`
-> (DCP-native), validated on the EDC-0.17.0 stack — so references below to
-> `0.11.2` / `iatp` / "issuance not available end-to-end" are stale. For the
-> current standing see `docs/internal/plan-1609-identityhub-connector-bundle.md`
-> §0.2 and `docs/user/common/guides/data-exchange-identity-hub.md`.
+> seeding, and the postgres-IH variant. **Every version / chart-version / `.tgz`
+> reference below reflects the Phase-9 snapshot and is superseded** — current
+> pins are: connector `0.13.0-rc2` (DCP-native; not `0.11.2`/`iatp`),
+> IdentityHub/IssuerService `v0.3.2` (not `v0.2.0`), `identity-and-trust-bundle`
+> `1.2.0` (not `1.1.2`), `tx-data-provider` `0.5.0` (not `0.4.6`) — and
+> "issuance not available end-to-end" no longer holds. For the current standing
+> see `docs/internal/plan-1609-identityhub-connector-bundle.md` §0.2 and
+> `docs/user/common/guides/data-exchange-identity-hub.md`.
 
 _Ran on macOS + kind (`kind-umbrella-1609`, K8s v1.35.0) against
 `charts/identity-and-trust-bundle` (IH + IS memory, no stub) + the

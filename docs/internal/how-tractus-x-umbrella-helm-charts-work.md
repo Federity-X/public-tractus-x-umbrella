@@ -1,6 +1,6 @@
 # How Tractus-X Umbrella Helm Charts Work
 
-**Internal Technical Reference — BE-165**
+**Internal Technical Reference — eclipse-tractusx/sig-release#1609** (internal ref: BE-165)
 
 This document explains the structure of the Tractus-X umbrella Helm chart, how configuration flows into sub-charts, how secrets/infrastructure are wired, and provides a step-by-step checklist for adding a new component (e.g. Identity Hub).
 
@@ -34,12 +34,12 @@ Every dependency has a `condition` flag that defaults to `false` in `values.yaml
 | `ssi-credential-issuer` | — | `ssi-credential-issuer.enabled` | tractusx-dev | 1.4.0 | Remote |
 | `semantic-hub` | — | `semantic-hub.enabled` | tractusx-dev | 0.5.0 | Remote |
 | `bpdm` | — | `bpdm.enabled` | tractusx-dev | 6.2.0 | Remote |
-| `tx-data-provider` | `dataconsumerOne` | `dataconsumerOne.enabled` | `file://../tx-data-provider` | 0.4.6 | Local |
-| `tx-data-provider` | — | `tx-data-provider.enabled` | `file://../tx-data-provider` | 0.4.6 | Local |
-| `tx-data-provider` | `dataconsumerTwo` | `dataconsumerTwo.enabled` | `file://../tx-data-provider` | 0.4.6 | Local |
+| `tx-data-provider` | `dataconsumerOne` | `dataconsumerOne.enabled` | `file://../tx-data-provider` | 0.5.0 | Local |
+| `tx-data-provider` | — | `tx-data-provider.enabled` | `file://../tx-data-provider` | 0.5.0 | Local |
+| `tx-data-provider` | `dataconsumerTwo` | `dataconsumerTwo.enabled` | `file://../tx-data-provider` | 0.5.0 | Local |
 | `pgadmin4` | — | `pgadmin4.enabled` | helm.runix.net | 1.25.x | Remote |
-| `bdrs-server-memory` | — | `bdrs-server-memory.enabled` | tractusx-dev | 0.5.7 | Remote |
-| `identity-and-trust-bundle` | — | `identity-and-trust-bundle.enabled` | `file://../identity-and-trust-bundle` | 1.1.2 | Local |
+| `bdrs-server-memory` | — | `bdrs-server-memory.enabled` | tractusx-dev | 0.6.0 | Remote |
+| `identity-and-trust-bundle` | — | `identity-and-trust-bundle.enabled` | `file://../identity-and-trust-bundle` | 1.2.0 | Local |
 | `opentelemetry-collector` | — | `opentelemetry-collector.enabled` | OTEL | 0.126.0 | Remote |
 | `jaeger` | — | `jaeger.enabled` | jaegertracing | 3.0.7 | Remote |
 | `prometheus` | — | `prometheus.enabled` | prometheus-community | 27.1.0 | Remote |
@@ -266,9 +266,9 @@ bdrs-server-memory:
 
 ---
 
-## 4. Current Identity Architecture (What Identity Hub Would Replace/Extend)
+## 4. Identity Architecture: Stub vs IdentityHub
 
-Today, identity is handled by three components:
+Identity has three supporting components:
 
 | Component | Role |
 |-----------|------|
@@ -276,19 +276,30 @@ Today, identity is handled by three components:
 | **CentralIDP (Keycloak)** | OAuth2/OIDC for human users and service accounts accessing Portal, BPDM, Discovery, etc. |
 | **BDRS Server** | In-memory BPN↔DID resolution for credential verification during data exchange. |
 
-**EDC connectors** authenticate to each other via the SSI Wallet Stub using the IATP/DCP protocol (Verifiable Presentations). They do NOT use Keycloak for connector-to-connector auth.
+**EDC connectors** authenticate to each other via the wallet using the DCP (formerly IATP) protocol (Verifiable Presentations). They do NOT use Keycloak for connector-to-connector auth.
 
-**Identity Hub** would likely **replace the SSI DIM Wallet Stub** as the production wallet implementation, providing:
-- Real DID management
-- Verifiable Credential issuance and storage
-- IATP Secure Token Service
-- Credential verification
+> **As built (#1609):** the Holder Wallet is now **pluggable** via a single
+> top-level `wallet.mode` in `charts/umbrella/values.yaml`:
+> - `wallet.mode: stub` → `ssi-dim-wallet-stub` (default, mock),
+> - `wallet.mode: identityHub` → real `tractusx-identityhub` + `tractusx-issuerservice`
+>   (charts `v0.3.2`, in `identity-and-trust-bundle`), with **shared**,
+>   **per-participant**, or **persistent (postgres)** topologies.
+>
+> The IdentityHub path provides real DID management, VC issuance/storage, the DCP
+> Secure Token Service, and credential verification, and the full DCP data exchange
+> is validated end-to-end on it. See
+> [data-exchange-identity-hub.md](../user/common/guides/data-exchange-identity-hub.md).
+> Section 5 below is a **generic** "add a component" template; for the real
+> IdentityHub wiring follow `wallet.mode` + the shipped `values-test-data-exchange-identity-hub*.yaml` profiles rather than the illustrative `identity-hub.enabled` toggle shown there.
 
 ---
 
-## 5. Checklist: Adding a New Component to the Umbrella Chart
+## 5. Checklist: Adding a New Component to the Umbrella Chart (generic template)
 
-Use this checklist when integrating Identity Hub (or any new component).
+Use this generic checklist when integrating **any** new component. (It predates
+#1609 and uses Identity Hub only as a worked example; the IdentityHub now ships
+inside `identity-and-trust-bundle` and is selected by `wallet.mode` — see §4 —
+not by a top-level `identity-hub.enabled` flag.)
 
 ### Step 1: Add Dependency in Chart.yaml
 
@@ -515,4 +526,4 @@ curl http://identity-hub.tx.test/health
 
 ---
 
-*Document for BE-165 — Based on tractus-x-umbrella v3.15.3 analysis*
+*Internal reference for eclipse-tractusx/sig-release#1609 — based on tractus-x-umbrella v3.17.0.*

@@ -568,25 +568,30 @@ Consumer EDC ──► Provider EDC   ──► Provider asks Stub to verify
 When Identity Hub replaces the stub, **every EDC connector's DCP config must change**:
 
 ```yaml
-# BEFORE (Stub) — all connectors point to the same shared stub
-dcp:
+# BEFORE (Stub) — legacy iatp/sts.dim schema; all connectors share one stub
+# (charts/values-test-data-exchange.yaml)
+iatp:
   trustedIssuers:
-    - id: did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003CRHK
+    - did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003CRHK
   sts:
-    div:
+    dim:
       url: http://ssi-dim-wallet-stub.tx.test/api/sts
-    oauth:
-      token_url: http://ssi-dim-wallet-stub.tx.test/oauth/token
 
-# AFTER (Identity Hub) — each connector points to its OWN Identity Hub
+# AFTER (Identity Hub) — DCP-native dcp/sts schema; the trusted issuer is the
+# IssuerService DID, and sts.div.url is left EMPTY so the OAuth2 STS client loads.
+# Shared topology shown (charts/values-test-data-exchange-identity-hub.yaml);
+# per-participant uses did:web:ih-<role>.tx.test:<BPN> hosts instead.
 dcp:
   trustedIssuers:
-    - id: did:web:identity-hub-operator.tx.test:BPNL00000003CRHK
+    - did:web:issuer-service.tx.test:BPNL00000003CRHK
   sts:
     div:
-      url: http://identity-hub-consumer1.tx.test/api/sts
+      url: ""
     oauth:
-      token_url: http://identity-hub-consumer1.tx.test/oauth/token
+      token_url: http://identity-hub.tx.test/api/sts/token
+      client:
+        id: did:web:identity-hub.tx.test:BPNL00000003AZQP
+        secret_alias: edc-wallet-secret
 ```
 
 **All touchpoints that change**:
@@ -830,7 +835,7 @@ The umbrella supports **two wallet implementations as peers**. Which one is acti
 |---|---|---|
 | `stub` (default) | `ssi-dim-wallet-stub` | `charts/values-test-data-exchange.yaml` |
 | `identityHub` — shared | `identity-hub` (in-memory) + `issuer-service` | `charts/values-test-data-exchange-identity-hub.yaml` |
-| `identityHub` — per-participant | four in-memory IdentityHubs (one per BPN) + `issuer-service` | `charts/values-test-data-exchange-identity-hub-per-participant.yaml` |
+| `identityHub` — per-participant | two in-memory IdentityHubs (provider + consumer1, one per participant) + `issuer-service` | `charts/values-test-data-exchange-identity-hub-per-participant.yaml` |
 | `identityHub` — persistent | `identity-hub-postgres` + `issuer-service` | `charts/values-test-data-exchange-identity-hub-postgres.yaml` |
 
 `_wallet-validate.tpl` enforces a **3-way** mutual exclusion — exactly one of `stub` \| `identity-hub` (in-memory) \| `identity-hub-postgres` may be enabled. Running the validated DCP flow today also needs the `charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml` image overlay (the EDC-0.17.0 connector + IdentityHub/IssuerService 0.17.0 builds are not yet on a public release channel) — see the deploy guide.
@@ -872,12 +877,33 @@ charts/tx-data-provider/values.yaml                           # wallet.mode prop
 charts/tx-data-provider/templates/post-install-identityhub-seed.yaml  # NEW — guarded seeding hook
 ```
 
-#### What this scaffold does NOT yet do
+#### Current status and known limitations
 
-- **Chart versions for `identity-hub` and `issuer-service` are placeholders** (`0.2.0`). These must be pinned to whatever Tractus-X publishes in the `eclipse-tractusx/charts/dev` registry before `helm dependency build` succeeds against real artifacts.
-- **Identity Hub seeding hook is a scaffold** — it logs TODOs and exits 0. Real implementation must call the Identity API + Issuer Service as documented in §7 above (ParticipantContext → KeyPair → DID publish → CIP issuance → poll until ISSUED).
-- **Per-participant topology** (`wallet.identityHub.topology: perParticipant`) is declared in the values schema but no profile file enables it. A future PR can add `values-test-data-exchange-identity-hub-per-participant.yaml` once one-Identity-Hub-per-BPN is needed.
-- **Vault seeding for Identity Hub keys** still needs to be extended in `post-install-vault-setup.yaml` to write to the path Identity Hub expects for its `KeyPairResource` private keys.
+This wallet path is **implemented and validated end-to-end** (catalog → contract
+negotiation → transfer → fetch) on all three IdentityHub topologies — see the
+[Data Exchange with Real IdentityHub](docs/user/common/guides/data-exchange-identity-hub.md)
+guide. The IdentityHub / IssuerService charts are pinned at `v0.3.2`, and the
+seeding hook `post-install-identityhub-seed.yaml` is a full implementation of the
+DCP provisioning walkthrough: it creates each ParticipantContext, activates the
+`did:web`, registers holders + credential definitions on the IssuerService, issues
+the per-type credentials, and a BDRS hook seeds the BPN→DID directory.
+
+Known limitations (all covered in the deploy guide):
+
+- **The released pins cannot complete the transfer yet.** The bundle `Chart.yaml`s
+  pin the released 0.16.0 line (connector `0.13.0-rc2`, IH/IS `v0.3.2`), which
+  predates the plain-`participantContextId` change (EDC 0.17.0 / IH #937). The
+  validated flow needs the EDC-0.17.0-aligned builds — connector from `tractusx-edc`
+  `main` and IdentityHub/IssuerService from
+  [PR #309](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309) —
+  pinned by `values-test-data-exchange-identity-hub-local-0.17.0.yaml`. A render
+  guard (`_wallet-validate.tpl`) fails any `wallet.mode=identityHub` install that
+  omits this overlay, so the non-working stack is never run silently. The guard and
+  overlay are removed once the upstream releases land and the pins are bumped.
+- **In-memory IdentityHub/BDRS lose state on pod restart** (shared / per-participant
+  topologies); the persistent (postgres) profile keeps ParticipantContexts +
+  credentials across restarts. Re-seed after a restart, or use the postgres profile —
+  see the deploy guide's re-seeding runbook.
 
 ---
 
@@ -1290,4 +1316,4 @@ Only the **Data Provider (OEM A)** has actual EDC infrastructure deployed with t
 
 ---
 
-*Generated from codebase analysis of Eclipse Tractus-X Umbrella v3.15.5 (`charts/umbrella/Chart.yaml`).*
+*Generated from codebase analysis of Eclipse Tractus-X Umbrella v3.17.0 (`charts/umbrella/Chart.yaml`).*

@@ -59,6 +59,13 @@ The full DCP exchange requires the **EDC 0.17.0-aligned** stack:
 | `tractusx-connector`     | `0.13.0` (EDC 0.17.0)      | catalog-time credential presentation; EDC 0.17.0 uses the **plain** `participantContextId` in URLs |
 | IdentityHub / IssuerService | `0.17.0`                | matching plain-`participantContextId` credential-service routing (IH #937)                         |
 
+> **Version naming.** "EDC 0.17.0" is the upstream *EDC platform* version. The
+> Tractus-X artifacts built on it carry their own tags: the connector is
+> `tractusx-connector 0.13.0` (the in-flight images are tagged `0.13.0-SNAPSHOT`),
+> and the released IdentityHub/IssuerService line is `v0.3.2` (the in-flight build
+> is from PR #309). "0.17.0-aligned" throughout this guide means *built on EDC
+> 0.17.0*, not a Tractus-X `0.17.0` release.
+
 These are **in-flight** — `tractusx-connector 0.13.0` is not yet released and the
 IdentityHub EDC-0.17.0 upgrade is open as
 [PR #309](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309). This
@@ -142,8 +149,10 @@ on every install — see [Single-command deploy](#single-command-deploy).
 
 - a running Kubernetes cluster (kind, minikube, k3s, …)
 - `kubectl`, `helm` 3.12+, plus `curl` + `jq` for the smoke test
-- `/etc/hosts` entries for `*.tx.test` (see [Cluster Setup](../setup/cluster/README.md));
-  in identityHub mode you additionally need:
+- `/etc/hosts` entries for `*.tx.test` (see the per-OS Cluster Setup guide —
+  [linux](../../linux/setup/README.md) · [mac](../../mac/setup/README.md) ·
+  [windows](../../windows/setup/README.md)); in identityHub mode you additionally
+  need:
 
 ```hosts
 127.0.0.1  identity-hub.tx.test
@@ -151,15 +160,16 @@ on every install — see [Single-command deploy](#single-command-deploy).
 127.0.0.1  issuer-service.tx.test
 ```
 
-(The per-participant profile also needs `ih-operator|provider|consumer1|consumer2.tx.test`.)
+(The per-participant profile also needs `ih-provider.tx.test`, `ih-provider-admin.tx.test` and `ih-consumer1.tx.test`.)
 
 ## Single-command deploy
 
 Pick one profile. Shared in-memory IH (the lightest):
 
 ```bash
-helm repo add tractusx-dev https://eclipse-tractusx.github.io/charts/dev
-helm dependency build charts/umbrella
+# One-time on a fresh clone: add every required helm repo and recursively
+# fetch chart dependencies (.tgz archives + Chart.lock are git-ignored).
+bash hack/helm-dependencies.bash
 
 helm install umbrella charts/umbrella \
   --namespace umbrella --create-namespace --timeout 25m \
@@ -167,9 +177,9 @@ helm install umbrella charts/umbrella \
   -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml
 ```
 
-Swap the first `-f` for `…-per-participant.yaml` (4 IdentityHubs; needs ~7 GiB)
-or `…-postgres.yaml` (persistent IH) to deploy the other topologies. The
-`-local-0.17.0` overlay applies to all three.
+Swap the first `-f` for `…-per-participant.yaml` (provider + consumer1, each on
+its **own** IdentityHub) or `…-postgres.yaml` (persistent IH) to deploy the other
+topologies. The `-local-0.17.0` overlay applies to all three.
 
 ## Verifying the seed
 
@@ -183,6 +193,8 @@ kubectl -n umbrella logs job/umbrella-dataprovider-post-install-identityhub-seed
 
 The SEED SUMMARY now reports issuance **loudly**: it lists `N ISSUED, M NOT
 issued` and, if any are missing, prints each one as `*** PARTIAL ISSUANCE ***`.
+(`§8/§9` in the seed output are the credential *request* and *retrieve* steps of
+the upstream [DCP API walkthrough](https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/docs/usage/dcp-api-walkthrough).)
 Each of the four participants should hold four ISSUED credentials (16 total).
 Tuning knobs (under `wallet.identityHubSeed` / `wallet`):
 
@@ -305,7 +317,7 @@ credentials persist across IdentityHub pod restarts (see *Known limitations* L3)
 | L1  | The validated flow needs the EDC-0.17.0 stack, not yet on a public release channel.                 | Use the `-local-0.17.0` overlay with built-from-source images (see [Version requirement](#version-requirement)). |
 | L2  | First negotiation after a fresh install can lose a race against the connector's **async** BDRS lookup. | Transient; the smoke test auto-retries and subsequent transfers reuse the warmed BdrsClient cache. Upstream connector timing gap (async BPN resolution vs. terminal transfer state) — to be filed against [tractusx-edc](https://github.com/eclipse-tractusx/tractusx-edc/issues); no umbrella-side fix. |
 | L3  | The in-memory IH (shared / per-participant) and in-memory BDRS lose state on pod restart.            | [Re-seed](#re-seeding-after-a-pod-restart) after a restart, or use the **postgres** profile (SQL state persists; key durability is still bounded by the shared dev-mode Vault). |
-| L4  | The per-participant profile runs four IdentityHub JVMs (~7 GiB).                                     | Use the shared profile for light testing; disable `dataconsumerTwo` + `identity-hub-consumer2` on small nodes.|
+| L4  | Per-participant runs one IdentityHub JVM **per participant**, so it scales with participant count. The shipped profile is deliberately **2 participants** (provider + consumer1) to fit a single node — a 4-participant variant over-contends the node (the provider data-backend loses the startup CPU race against the IdentityHub JVMs and crashloops). | Keep per-participant at 2; for more participants, give the cluster proportionally more CPU/memory, or use the shared/postgres profile (single multi-tenant IdentityHub). |
 
 ## Teardown
 

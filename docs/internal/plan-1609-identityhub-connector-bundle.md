@@ -19,7 +19,7 @@ is now validated end-to-end on **all three** IdentityHub profiles:
 | Profile (`-f charts/…`)                                       | Topology / store                  | Validated                                   |
 | ------------------------------------------------------------- | --------------------------------- | ------------------------------------------- |
 | `values-test-data-exchange-identity-hub.yaml`                 | shared in-memory IH               | ✅ clean `helm install` from scratch        |
-| `values-test-data-exchange-identity-hub-per-participant.yaml` | one in-memory IH per BPN (4 IHs)  | ✅ provider↔consumer1, each on its own IH   |
+| `values-test-data-exchange-identity-hub-per-participant.yaml` | one IH per participant (2: provider + consumer1) | ✅ provider↔consumer1, each on its own IH   |
 | `values-test-data-exchange-identity-hub-postgres.yaml` (NEW)  | persistent IH (PostgreSQL)        | ✅ full transfer                            |
 
 All three run on the EDC-0.17.0-aligned stack via the new image overlay
@@ -32,8 +32,13 @@ version gap — the committed `Chart.yaml`s still pin the 0.16.0 line).
    kubectl patching). Required encoding the working config into the profile:
    PLAIN `participantContextId` + the EDC-0.17.0 `TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL`
    (was base64 / the legacy `TX_IAM_IATP_…` name).
-2. **Per-participant topology (G2) — DONE** (was "follow-up" in §0.1). Four
-   IdentityHub JVMs fit at ~68% memory on a 7.65 GiB kind node; transfer green.
+2. **Per-participant topology (G2) — DONE** (was "follow-up" in §0.1). Each
+   participant runs its own IdentityHub; the shipped profile is **2 participants**
+   (provider + consumer1, each on its own IH) so it fits a single kind node and the
+   provider↔consumer1 transfer is green. (A 4-participant variant over-contends one
+   node — the provider data-backend loses the startup CPU race against the extra
+   IdentityHub JVMs and crashloops, stalling the test-data hook; 2 fully covers the
+   cross-IdentityHub flow since the transfer only uses provider + consumer1.)
 3. **Persistent (postgres) IdentityHub — NEW + DONE.** Added `tractusx-identityhub`
    (alias `identity-hub-postgres`) as a third mutually-exclusive wallet
    (`_wallet-validate.tpl` is now 3-way: stub | identity-hub | identity-hub-postgres).
@@ -50,8 +55,10 @@ version gap — the committed `Chart.yaml`s still pin the 0.16.0 line).
    that benefits every profile.
 4. **Deploy-guide refresh (G6) — DONE.** `docs/user/common/guides/data-exchange-identity-hub.md`
    rewritten for the three profiles, the 0.17.0 stack and the smoke test.
-5. **Committed** — `c9e3e2d` (feature) + `659325c` (this plan). Single-author,
-   DCO sign-off, no AI attribution; `CLAUDE.md` excluded.
+5. **Committed** to `feature/1609-identityhub-connector-bundle` as a series of
+   logical commits (feature, CI, docs, plan), each single-author with DCO
+   sign-off and no AI attribution; `CLAUDE.md` excluded. (The hardening pass in
+   §0.2.1 and §0.3/§0.4 landed in later commits on the same branch.)
 
 Also hardened since §0.1: the BDRS directory-seeding hook now runs on
 `post-upgrade` too, and `hack/dcp-data-transfer-smoke.sh` self-warms the
@@ -111,7 +118,7 @@ intent and depth:
 | Dimension | This branch (`feature/1609-…`) | PR #412 |
 |---|---|---|
 | Wallet stack | IdentityHub **and** IssuerService deployed in-chart (holder + issuer/trust anchor) | IdentityHub only; IssuerService is **external** (referenced as DIDs/URLs, not deployed) |
-| Topology | `wallet.mode` abstraction, **three** mutually-exclusive IH profiles (shared in-memory, per-participant 4-IH, persistent postgres) + render-time validator | **Per-participant only** — one merged `decentralized-identity-connector` subchart (EDC+IH+shared postgres/vault) aliased provider+consumer (2 IHs); each in its **own namespace** until IdentityHub > 0.2.0 |
+| Topology | `wallet.mode` abstraction, **three** mutually-exclusive IH profiles (shared in-memory, per-participant — provider+consumer1 each on its own IH, persistent postgres) + render-time validator | **Per-participant only** — one merged `decentralized-identity-connector` subchart (EDC+IH+shared postgres/vault) aliased provider+consumer (2 IHs); each in its **own namespace** until IdentityHub > 0.2.0 |
 | Components / source | Unreleased EDC 0.17.0 line: connector from `tractusx-edc` **main** (`0.13.0-SNAPSHOT`), IH/IS from **PR #309** — newer, in-flight | **Released** charts only: IdentityHub v0.2.1, connector via `tx-data-provider` 0.4.6, BDRS 0.6.0 — conservative, stable |
 | End-to-end DCP transfer | **Validated** (catalog → negotiation → transfer → fetch) by a stage-aware smoke test (`hack/dcp-data-transfer-smoke.sh`) | **Deploy/seed-only** — no Job, no CI test profile, no smoke test; docs stop at deploy + manual Bruno exploration (issuance can't run from the chart — IssuerService isn't deployed) |
 | Seeding | **Automated** post-install Job (10-step DCP walkthrough; issues per-type claims `BpnCredential.bpn`, `DataExchangeGovernanceCredential.contractVersion`; plain `participantContextId`; unique `holderPid`) + BDRS hook | **Manual** — operator runs ~13 Bruno requests by hand against the external IssuerService; secrets hand-set; BDRS seeded declaratively |
@@ -146,7 +153,7 @@ IdentityHub + IssuerService (replacing the `ssi-dim-wallet-stub`) and runs a
 end-to-end, across **three** selectable topologies:
 
 - **shared** in-memory IdentityHub (one multi-tenant host),
-- **per-participant** (one in-memory IdentityHub per BPN, 4 IHs),
+- **per-participant** (one in-memory IdentityHub per participant; shipped as 2: provider + consumer1),
 - **persistent** IdentityHub backed by PostgreSQL.
 
 All three are validated by a stage-aware smoke test
@@ -478,11 +485,12 @@ Applied and `helm lint`/`helm template`-verified:
 helm template umb charts/umbrella
   → tractusx.eclipse.org/wallet-mode: "stub"
 
-# both wallets on — validator fires
+# both wallets on — validator fires (3-way exclusion: stub | identity-hub | identity-hub-postgres)
 helm template umb charts/umbrella --set identity-and-trust-bundle.identity-hub.enabled=true
-  → Error: execution error at (umbrella/templates/configmap-wallet-mode.yaml:13:4):
-    identity-and-trust-bundle: only one of `ssi-dim-wallet-stub.enabled` or
-    `identity-hub.enabled` may be true at a time
+  → Error: execution error at (umbrella/templates/configmap-wallet-mode.yaml):
+    identity-and-trust-bundle: only ONE wallet may be enabled at a time — pick
+    exactly one of `ssi-dim-wallet-stub.enabled`, `identity-hub.enabled` (in-memory)
+    or `identity-hub-postgres.enabled` (persistent)
 ```
 
 ---

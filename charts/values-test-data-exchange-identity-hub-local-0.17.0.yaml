@@ -49,7 +49,7 @@
 #   helm install umbrella charts/umbrella \
 #     -f charts/values-test-data-exchange-identity-hub.yaml \
 #     -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
-#     --namespace umbrella --create-namespace --timeout 20m
+#     --namespace umbrella --create-namespace --timeout 25m
 ###############################################################
 
 # --- Version-mismatch guard sentinel ---
