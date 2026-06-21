@@ -17,90 +17,75 @@
 # SPDX-License-Identifier: Apache-2.0
 ###############################################################
 #
-# Data-exchange profile: Identity Hub with PER-PARTICIPANT topology.
+# Data-exchange profile: Identity Hub with PER-PARTICIPANT topology (2 participants).
 #
-# Each dataspace participant runs its OWN Identity Hub (Holder Wallet) behind
-# its OWN ingress hostname, instead of sharing one multi-tenant Identity Hub
-# (`values-test-data-exchange-identity-hub.yaml`). This mirrors a real
-# multi-organization dataspace, where every org operates its own wallet.
+# provider + consumer1, EACH on its OWN Identity Hub behind its OWN ingress host,
+# instead of one shared multi-tenant IH (values-test-data-exchange-identity-hub.yaml).
+# This validates the cross-IdentityHub DCP flow — the smoke test runs a
+# provider<->consumer1 transfer with each holder on a DISTINCT IdentityHub — at a
+# footprint that fits a single kind node.
 #
-#   * operator  → bundle Identity Hub, re-hosted at ih-operator.tx.test
-#   * provider  → identity-hub-provider   (ih-provider.tx.test)
-#   * consumer1 → identity-hub-consumer1  (ih-consumer1.tx.test)
-#   * consumer2 → identity-hub-consumer2  (ih-consumer2.tx.test)
-#   * Issuer Service → issuer-service.tx.test (still SHARED — a Tractus-X
-#     dataspace has a single trusted Issuer; all four wallets trust it)
+#   * provider  → bundle Identity Hub, hosted at ih-provider.tx.test
+#   * consumer1 → identity-hub-consumer1   (ih-consumer1.tx.test)
+#   * Issuer Service → issuer-service.tx.test (shared trust anchor; both trust it)
 #
-# DIDs keep the BPN path segment (did:web:<host>:<BPN>) so DID-document
-# resolution reuses the exact, proven code path of the shared profile —
-# the only difference is the per-participant host.
+# Only TWO IdentityHub JVMs. The operator + consumer2 participants of the full
+# topology are intentionally omitted: the transfer exercises only provider<->consumer1,
+# so extra IdentityHubs add resource cost but no functional coverage. (A 4-IH variant
+# over-contends a single node — during the startup stampede the provider data-backend
+# loses the CPU race against the IdentityHub JVMs, fails its liveness probe, and
+# crashloops, stalling the post-install test-data hook.) The provider REUSES the
+# bundle IdentityHub (alias `identity-hub`) as its own per-participant IH — the bundle
+# IH must stay enabled to satisfy the wallet validator anyway — so there is no
+# separate "operator" IdentityHub.
 #
-# This profile is deliberately SELF-CONTAINED (installable with a single `-f`):
-# its connector/BDRS blocks are NOT factored into a shared base. Unlike the
-# shared/postgres profiles (which share one host), every connector here points
-# at a different per-participant host (ih-<role>.tx.test) with a distinct DID,
-# contextId and credential-service URL — values that plain (non-templated) Helm
-# values files cannot derive — so there is little genuinely-common config to
-# extract, and keeping the profile independently installable is worth more.
+# DIDs keep the BPN path segment (did:web:<host>:<BPN>) so DID-document resolution
+# reuses the exact, proven code path of the shared profile — only the host differs.
 #
-# Wiring (implemented in this repo):
-#   * charts/umbrella/Chart.yaml declares three aliased
-#     `tractusx-identityhub-memory` deps (identity-hub-provider /
-#     identity-hub-consumer1 / identity-hub-consumer2), gated by
-#     `<alias>.enabled` (default false; flipped on below).
-#   * wallet.identityHub.perParticipant.{hosts,serviceBase} drive the derived
-#     ConfigMap + seeding Job so each holder is provisioned on its own IH.
-#   * A SINGLE seeding Job (rendered from the tx-data-provider instance)
-#     provisions every participant across all four IdentityHubs.
-#
-# Resource note: this runs FOUR IdentityHub JVMs. The three per-participant
-# IHs are tuned lean (320Mi request / 768Mi limit, heap capped via
-# JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=50) so they fit alongside the operator
-# IH, connectors, Issuer Service, BDRS and Vaults on a single-node kind
-# cluster. For functional testing the shared profile is much lighter.
-# VALIDATED 2026-06-20 on a 7.65 GiB kind node: the full 4-IH stack runs at
-# ~68% memory (~5.2 GiB) and the provider<->consumer1 DCP data transfer passes
-# end-to-end (catalog -> negotiation -> transfer -> fetch). The transfer only
-# exercises provider + consumer1 (each on its own IdentityHub) — operator and
-# consumer2 add no transfer coverage, so on tighter nodes disable
-# `dataconsumerTwo` + `identity-hub-consumer2` (and drop consumer2 from
-# `wallet.participants` + the BDRS seeding list) to free ~1.5 GiB.
+# Self-contained (installable with a single topology `-f`; the connector/BDRS blocks
+# are intentionally not factored into a shared base — every connector points at a
+# different per-participant host, which plain values files cannot derive).
 #
 # Usage:
 #   bash hack/helm-dependencies.bash          # repackages nested subcharts
 #   helm install umbrella charts/umbrella \
 #     -f charts/values-test-data-exchange-identity-hub-per-participant.yaml \
+#     -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
 #     --namespace umbrella --create-namespace --timeout 25m
+#   # smoke test (provider on its own IH host):
+#   INGRESS_IP=127.0.0.1 PROVIDER_DID=did:web:ih-provider.tx.test:BPNL00000003AYRE \
+#     ./hack/dcp-data-transfer-smoke.sh
 ###############################################################
 
 wallet:
   mode: identityHub
   operatorBpn: "BPNL00000003CRHK"
+  # Slim the dataspace to the two transfer parties. operator + consumer2 are
+  # REMOVED (Helm null-deletes the key) from the umbrella default participant set,
+  # so the derived ConfigMap + seeding Job provision only provider + consumer1.
+  participants:
+    operator: null
+    consumer2: null
   identityHub:
     topology: perParticipant
     perParticipant:
       # Participant slug -> ingress host of THAT participant's own Identity Hub.
-      # did:web documents are served from each host (operator stays on the
-      # bundle's IH; provider/consumer1/consumer2 each get a dedicated IH).
       hosts:
-        operator:  "ih-operator.tx.test"
         provider:  "ih-provider.tx.test"
         consumer1: "ih-consumer1.tx.test"
-        consumer2: "ih-consumer2.tx.test"
       # Participant slug -> in-cluster IdentityHub name (the Helm dep alias).
-      # Drives the Service DNS (<release>-<base>) and pod-label selector
-      # (app.kubernetes.io/name=<base>) the seeding Job uses to reach each IH.
+      # provider reuses the bundle IH (alias `identity-hub`); consumer1 gets a
+      # dedicated one. Drives the Service DNS (<release>-<base>) + pod-label
+      # selector (app.kubernetes.io/name=<base>) the seeding Job uses.
       serviceBase:
-        operator:  "identity-hub"
-        provider:  "identity-hub-provider"
+        provider:  "identity-hub"
         consumer1: "identity-hub-consumer1"
-        consumer2: "identity-hub-consumer2"
 
 # -----------------------------------------------------------------------------
-# Operator Identity Hub + shared Issuer Service (identity-and-trust-bundle).
-# The operator keeps the bundle's IdentityHub; its ingress is renamed to
-# ih-operator.tx.test so the operator DID is did:web:ih-operator.tx.test:<BPN>,
-# consistent with the per-participant hosts above.
+# Provider Identity Hub (the bundle IH) + shared Issuer Service.
+# The bundle IdentityHub IS the provider's wallet; its ingress is ih-provider.tx.test
+# so the provider DID is did:web:ih-provider.tx.test:<BPN>. It must stay enabled to
+# satisfy the wallet validator (which gates on `identity-hub`/`identity-hub-postgres`).
 # -----------------------------------------------------------------------------
 identity-and-trust-bundle:
   enabled: true
@@ -111,70 +96,30 @@ identity-and-trust-bundle:
     identityhub:
       ingresses:
         - enabled: true
-          hostname: "ih-operator.tx.test"
+          hostname: "ih-provider.tx.test"
           endpoints: [credentials, did, sts]
           className: "nginx"
           tls:
             enabled: false
         - enabled: true
-          hostname: "ih-operator-admin.tx.test"
+          hostname: "ih-provider-admin.tx.test"
           endpoints: [identity, accounts]
           className: "nginx"
           tls:
             enabled: false
   issuer-service:
     enabled: true
-    # D25: absolute, cluster-reachable status-list URL embedded into every
-    # issued VC. A non-absolute value breaks downstream VP verifiers
-    # (BDRS revocation-list download → "URI is not absolute" → 400).
+    # D25: absolute, cluster-reachable status-list URL embedded into every issued
+    # VC. A non-absolute value breaks downstream VP verifiers (BDRS revocation-list
+    # download → "URI is not absolute" → 400).
     statuslist:
       callback:
         address: "http://issuer-service.tx.test/statuslist"
 
 # -----------------------------------------------------------------------------
-# Per-participant Identity Hubs (umbrella-level aliased deps, gated in
-# charts/umbrella/Chart.yaml). Each mirrors the bundle's operator IH config
-# (boot-safe probes) but is tuned lean (768Mi memory limit, heap capped) and
-# exposes its own did:web host. These are 3 ADDITIONAL IdentityHub JVMs on top
-# of the operator IH.
+# consumer1's dedicated Identity Hub (umbrella-level aliased dep). Lean-tuned
+# (768Mi limit, heap capped) and exposes its own did:web host.
 # -----------------------------------------------------------------------------
-identity-hub-provider:
-  enabled: true
-  install:
-    postgresql: false
-    vault: false
-  identityhub:
-    livenessProbe:
-      initialDelaySeconds: 90
-      periodSeconds: 15
-      timeoutSeconds: 10
-      failureThreshold: 6
-    readinessProbe:
-      initialDelaySeconds: 90
-      periodSeconds: 15
-      timeoutSeconds: 10
-      failureThreshold: 6
-    resources:
-      requests:
-        cpu: 150m
-        memory: 320Mi
-      limits:
-        cpu: 1
-        memory: 768Mi
-    # Cap heap to ~50% of the 768Mi limit so four IdentityHub JVMs fit on a
-    # memory-constrained single-node kind cluster.
-    env:
-      JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=50.0"
-    didweb:
-      https: false
-    ingresses:
-      - enabled: true
-        hostname: "ih-provider.tx.test"
-        endpoints: [credentials, did, sts]
-        className: "nginx"
-        tls:
-          enabled: false
-
 identity-hub-consumer1:
   enabled: true
   install:
@@ -198,8 +143,7 @@ identity-hub-consumer1:
       limits:
         cpu: 1
         memory: 768Mi
-    # Cap heap to ~50% of the 768Mi limit so four IdentityHub JVMs fit on a
-    # memory-constrained single-node kind cluster.
+    # Cap heap to ~50% of the 768Mi limit.
     env:
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=50.0"
     didweb:
@@ -212,56 +156,23 @@ identity-hub-consumer1:
         tls:
           enabled: false
 
+# The remaining per-participant IH aliases are unused in the 2-participant topology.
+identity-hub-provider:
+  enabled: false
 identity-hub-consumer2:
-  enabled: true
-  install:
-    postgresql: false
-    vault: false
-  identityhub:
-    livenessProbe:
-      initialDelaySeconds: 90
-      periodSeconds: 15
-      timeoutSeconds: 10
-      failureThreshold: 6
-    readinessProbe:
-      initialDelaySeconds: 90
-      periodSeconds: 15
-      timeoutSeconds: 10
-      failureThreshold: 6
-    resources:
-      requests:
-        cpu: 150m
-        memory: 320Mi
-      limits:
-        cpu: 1
-        memory: 768Mi
-    # Cap heap to ~50% of the 768Mi limit so four IdentityHub JVMs fit on a
-    # memory-constrained single-node kind cluster.
-    env:
-      JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=50.0"
-    didweb:
-      https: false
-    ingresses:
-      - enabled: true
-        hostname: "ih-consumer2.tx.test"
-        endpoints: [credentials, did, sts]
-        className: "nginx"
-        tls:
-          enabled: false
+  enabled: false
 
 # -----------------------------------------------------------------------------
 # EDC connectors → each participant's OWN Identity Hub (DCP schema, 0.13.0-rc2).
-# Mirrors the shared profile but with per-host DIDs / STS / credential-service
-# URLs. trustedIssuers stays the single shared IssuerService DID (it SIGNS the
-# VCs); the per-host IH only HOSTS/presents them.
+# Per-host DIDs / STS / credential-service URLs; trustedIssuers stays the single
+# shared IssuerService DID (it SIGNS the VCs; the per-host IH only HOSTS them).
 # -----------------------------------------------------------------------------
 dataconsumerOne:
   enabled: true
   wallet:
     mode: identityHub
-    # A SINGLE seeding Job (rendered from the tx-data-provider instance below)
-    # provisions every participant across all four IdentityHubs. Disable the
-    # redundant per-consumer Jobs.
+    # The provider's tx-data-provider instance runs THE single seeding Job; disable
+    # the redundant per-consumer Job.
     identityHubSeed:
       enabled: false
   dataspace-connector-bundle:
@@ -298,7 +209,9 @@ tx-data-provider:
   enabled: true
   wallet:
     mode: identityHub
-    # THE single Identity-Hub seeding Job for the per-participant topology.
+    # THE single Identity-Hub seeding Job. Its default IdentityHub is the bundle
+    # `identity-hub` (= the provider's IH); the per-participant loop then reaches
+    # consumer1's dedicated IH via the serviceBase map above.
     identityHubSeed:
       enabled: true
   dataspace-connector-bundle:
@@ -331,56 +244,20 @@ tx-data-provider:
           TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://ih-provider.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
           TX_IAM_IATP_CREDENTIALSERVICE_URL: http://ih-provider.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
 
+# consumer2 connector is not part of the 2-participant topology.
 dataconsumerTwo:
-  enabled: true
-  wallet:
-    mode: identityHub
-    identityHubSeed:
-      enabled: false
-  dataspace-connector-bundle:
-    tractusx-connector:
-      dcp:
-        trustedIssuers:
-          - did:web:issuer-service.tx.test:BPNL00000003CRHK
-        sts:
-          div:
-            url: ""
-          oauth:
-            token_url: http://ih-consumer2.tx.test/api/sts/token
-            client:
-              id: did:web:ih-consumer2.tx.test:BPNL00000003AVTH
-              secret_alias: edc-wallet-secret
-      participant:
-        id: did:web:ih-consumer2.tx.test:BPNL00000003AVTH
-        bpnl: BPNL00000003AVTH
-        # plain participantContextId (EDC 0.17.0 / IH #937)
-        contextId: "consumer-bpnl00000003avth"
-      controlplane:
-        env:
-          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://ih-consumer2.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
-          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://ih-consumer2.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
-        bdrs:
-          server:
-            url: http://bdrs-server:8082/api/directory
-      dataplane:
-        env:
-          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://ih-consumer2.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
-          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://ih-consumer2.tx.test/api/credentials/v1/participants/consumer-bpnl00000003avth
+  enabled: false
 
-# BDRS — re-seed with per-participant (per-host) DIDs.
+# BDRS — re-seed with the two participants' per-host DIDs.
 bdrs-server-memory:
   enabled: true
   seeding:
     enabled: true
     bpnList:
-      - bpn: "BPNL00000003CRHK"
-        did: "did:web:ih-operator.tx.test:BPNL00000003CRHK"
       - bpn: "BPNL00000003AYRE"
         did: "did:web:ih-provider.tx.test:BPNL00000003AYRE"
       - bpn: "BPNL00000003AZQP"
         did: "did:web:ih-consumer1.tx.test:BPNL00000003AZQP"
-      - bpn: "BPNL00000003AVTH"
-        did: "did:web:ih-consumer2.tx.test:BPNL00000003AVTH"
   server:
     trustedIssuers:
       - did:web:issuer-service.tx.test:BPNL00000003CRHK
