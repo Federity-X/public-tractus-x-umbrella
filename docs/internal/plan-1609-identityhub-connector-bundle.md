@@ -4,7 +4,7 @@
 > **Milestone:** Tractus-X 26.06
 > **Labels:** `tractusx-edc`, `tractusx-identityhub`, `tractus-x-umbrella`, `Prep-R26.06`
 > **Owner (us):** @wahidulazam (contributor); committers: @matbmoser, @CDiezRodriguez, @mgarciaLKS
-> **Status of this plan:** **2026-06-20 — ALL #1609 VALIDATION STEPS COMPLETE.** Full DCP data-exchange (catalog → negotiation → transfer → fetch) validated end-to-end on **all three** IdentityHub profiles (shared, per-participant, persistent/postgres). See **§0.2** for the authoritative current standing (it supersedes the "What's left" / G2 items in §0.1; §0.1 in turn supersedes the gaps/DoD/version facts further below).
+> **Status of this plan:** **2026-06-20 — ALL #1609 VALIDATION STEPS COMPLETE; 2026-06-21 — hardening pass done.** Full DCP data-exchange (catalog → negotiation → transfer → fetch) validated end-to-end on **all three** IdentityHub profiles (shared, per-participant, persistent/postgres). See **§0.2** for the authoritative current standing, **§0.2.1** for the hardening pass, and **§0.4** for the paste-ready PR-positioning note. (§0.2 supersedes the "What's left" / G2 items in §0.1; §0.1 in turn supersedes the gaps/DoD/version facts further below.)
 > **Re-plan history:** 2026-06-19 — Test Case 1 passes on the shared profile (**§0.1**). 2026-06-18 — latest-component check + per-participant feasibility (**§0.0**). 2026-04-19 draft v3 — D10 resolved (postgres IssuerService); see `docs/common/concept/1609-local-test-findings.md#phase-11`.
 
 ---
@@ -57,11 +57,45 @@ Also hardened since §0.1: the BDRS directory-seeding hook now runs on
 `post-upgrade` too, and `hack/dcp-data-transfer-smoke.sh` self-warms the
 cold-BDRS-cache first-transfer race (re-negotiates once).
 
-**Only item still open (gated on upstream releases, not on us):** bump the
-bundle `Chart.yaml` pins to `tractusx-connector 0.13.0` (EDC 0.17.0) +
-IdentityHub/IssuerService 0.17.0 once published, then delete the `-local-0.17.0`
-overlay. (Optional: persist the postgres IH's key vault; harden the in-memory
-BDRS against restarts.)
+**Positioning (this is a deliberate strategy, not a blocker):** the bundle
+**rides the in-flight stack on purpose** — connector from `tractusx-edc` **main**
+(EDC 0.17.0) + IdentityHub/IssuerService from **PR #309** — to *demonstrate the
+fix now* rather than wait for releases. That demonstration is what drives the
+upstream sequence. **Path to merge:** ship `tractusx-connector 0.13.0` (EDC
+0.17.0) → merge IH #309 → bump the bundle `Chart.yaml` pins to the released
+versions and delete the `-local-0.17.0` overlay (and its render guard) → merge
+this. A render guard (`_wallet-validate.tpl`) fails any identityHub install that
+omits the overlay, so the non-working 0.16.0 stack is never run silently. See
+**§0.4** for the paste-ready PR-positioning note.
+
+### 0.2.1 — Hardening pass (2026-06-21)
+
+A quality pass on top of the validated flow (no behavioural change to the proven
+path; all umbrella-side):
+
+- **Seed**: loud SEED SUMMARY (`N ISSUED, M NOT issued`, lists each miss);
+  configurable `credentialPollTimeoutSeconds` (default 120, was a fixed 40s) +
+  opt-in `strictIssuance`; `frameworkContractVersion` threaded from umbrella
+  values via the wallet-mode ConfigMap (was hardcoded `"1.0"`); fail-fast on an
+  unknown credential type (would otherwise issue a thin VC the policy rejects).
+- **Validator**: zero-wallets case in `identityHub` mode now fails; **temporary
+  version-mismatch guard** (`wallet.identityHub.imagesOverridden` sentinel, set
+  by the overlay) blocks the non-working released stack.
+- **CI**: a template-render job for all three identityHub profiles (they can't
+  `helm install` in CI without the in-flight images) + a negative assert that the
+  guard fires without the overlay.
+- **Docs**: component list (installation README) now lists IH-memory / IH-postgres
+  / IssuerService; deploy guide gained reproducible **build-from-source steps**, a
+  **re-seed runbook**, a precise **persistence caveat** (postgres SQL is durable;
+  keys live in the shared **dev-mode** `umbrella-vault`, so survive an IH-pod
+  restart but not a Vault restart), and an explicit **cold-BDRS-cache** note.
+- **Re-seed idempotency (holderPid)**: a `post-upgrade` re-seed re-hits the
+  holder-credential-request PK as a tolerated soft no-op — re-running the seed
+  only fills gaps and is safe; not to be mistaken for a bug.
+
+Still genuinely optional (not blocking merge): back `umbrella-vault` with
+persistent storage for end-to-end key durability; harden the in-memory BDRS
+against restarts.
 
 ---
 
@@ -94,6 +128,64 @@ end-to-end validation + topology abstraction could converge.
 _(#412 analyzed 2026-06-20 while OPEN at head `6cc7d5a`; its state may change.
 PR #309 is the author's own OPEN EDC-0.17.0 upgrade of tractusx-identityhub, so
 this branch's 0.17.0 baseline is in-flight.)_
+
+---
+
+## 0.4 — PR-positioning note (paste-ready for the umbrella PR body)
+
+> _Copy the block below into the umbrella PR description. It frames the PR as a
+> demonstration that drives the upstream release sequence._
+
+---
+
+### What this PR does
+
+Adds a `wallet.mode=identityHub` path to the umbrella that stands up a **real**
+IdentityHub + IssuerService (replacing the `ssi-dim-wallet-stub`) and runs a
+**full DCP data exchange** — catalog → contract negotiation → transfer → fetch —
+end-to-end, across **three** selectable topologies:
+
+- **shared** in-memory IdentityHub (one multi-tenant host),
+- **per-participant** (one in-memory IdentityHub per BPN, 4 IHs),
+- **persistent** IdentityHub backed by PostgreSQL.
+
+All three are validated by a stage-aware smoke test
+(`hack/dcp-data-transfer-smoke.sh`) that ends in `FULL DCP DATA TRANSFER
+SUCCEEDED`. Provisioning is automated by a post-install Job (the DCP API
+walkthrough) plus a BDRS directory-seeding hook — no manual Bruno steps.
+
+### Why it rides in-flight builds (and what we're asking upstream)
+
+The working flow needs the **EDC-0.17.0-aligned** stack, which is in-flight:
+
+- connector built from [`tractusx-edc` `main`](https://github.com/eclipse-tractusx/tractusx-edc) (EDC 0.17.0, `0.13.0-SNAPSHOT`);
+- IdentityHub + IssuerService from [`tractusx-identityhub` PR #309](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309).
+
+We deliberately **demonstrate the fix on these builds now** instead of waiting.
+The released 0.16.0 line (`tractusx-connector:0.13.0-rc2`, IH/IS `v0.3.2`) cannot
+complete the transfer — EDC 0.17.0 / IH #937 switched `participantContextId` URL
+handling to plain — so the bundle pins still target 0.16.0 and a render guard
+fails any identityHub install that doesn't layer the local-image overlay.
+
+**Proposed sequence:** release `tractusx-connector 0.13.0` (EDC 0.17.0) → merge
+IdentityHub/IssuerService 0.17.0 (PR #309) → here, bump the bundle `Chart.yaml`
+pins to the released versions and delete the `-local-0.17.0` overlay + its guard
+→ merge this PR.
+
+### How to reproduce
+
+1. Build the in-flight images from source and load them into your cluster — steps
+   in [`docs/user/common/guides/data-exchange-identity-hub.md`](../user/common/guides/data-exchange-identity-hub.md#build-the-in-flight-images-from-source).
+2. `helm install … -f charts/values-test-data-exchange-identity-hub.yaml -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml`
+   (swap the first `-f` for the per-participant or postgres profile).
+3. `INGRESS_IP=127.0.0.1 ./hack/dcp-data-transfer-smoke.sh`.
+
+### Relationship to #412
+
+Complementary, not overlapping — see §0.3. #412 is a release-pinned
+deployable-bundle + manual-Bruno-docs slice (IdentityHub only, IssuerService
+external); this PR adds the IssuerService, the three `wallet.mode` topologies,
+automated seeding, and the validated end-to-end transfer.
 
 ---
 

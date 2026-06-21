@@ -9,11 +9,17 @@ and run a **full DCP data exchange** (catalog → contract negotiation → trans
 
 > **Status (26.06 milestone):** tracked under
 > [eclipse-tractusx/sig-release#1609](https://github.com/eclipse-tractusx/sig-release/issues/1609).
-> The full DCP data-transfer flow has been validated end-to-end on all three
+> The full DCP data-transfer flow is validated end-to-end on all three
 > IdentityHub profiles below (shared, per-participant, and persistent/postgres).
-> See **[Version requirement](#version-requirement)** — the working flow needs
-> the EDC-0.17.0-aligned components; until they are released the local-image
-> overlay is required.
+> This guide **demonstrates the fix on the in-flight stack** — the connector
+> built from [tractusx-edc `main`](https://github.com/eclipse-tractusx/tractusx-edc)
+> (EDC 0.17.0) plus IdentityHub/IssuerService from
+> [tractusx-identityhub PR #309](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309).
+> It does **not** wait on upstream releases: it proves the solution now and so
+> drives the release sequence — ship `tractusx-connector 0.13.0` → merge IH
+> #309 → bump the umbrella pins and drop the overlay. The
+> **[Version requirement](#version-requirement)** section gives the reproducible
+> build + overlay steps so anyone can re-run the demonstration today.
 
 ## Overview
 
@@ -53,17 +59,68 @@ The full DCP exchange requires the **EDC 0.17.0-aligned** stack:
 | `tractusx-connector`     | `0.13.0` (EDC 0.17.0)      | catalog-time credential presentation; EDC 0.17.0 uses the **plain** `participantContextId` in URLs |
 | IdentityHub / IssuerService | `0.17.0`                | matching plain-`participantContextId` credential-service routing (IH #937)                         |
 
-At the time of writing those are not yet on a public release channel, so they
-are **built from source** and the bundle `Chart.yaml`s still pin the 0.16.0 line
-(`tractusx-connector:0.13.0-rc2`, IH/IS `v0.3.2`):
+These are **in-flight** — `tractusx-connector 0.13.0` is not yet released and the
+IdentityHub EDC-0.17.0 upgrade is open as
+[PR #309](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309). This
+guide rides those in-flight builds **on purpose**, to demonstrate the working fix
+now rather than wait. The bundle `Chart.yaml`s still pin the released 0.16.0 line
+(`tractusx-connector:0.13.0-rc2`, IH/IS `v0.3.2`), which **cannot** complete the
+transfer (it predates the plain-`participantContextId` change). A render guard
+(`templates/_wallet-validate.tpl`) therefore fails any `wallet.mode=identityHub`
+install that does **not** layer the local-image overlay below — so nobody
+silently runs the non-working stack.
 
-- the connector control/data-plane images are built from [`tractusx-edc` **main**](https://github.com/eclipse-tractusx/tractusx-edc) (EDC 0.17.0, tagged `0.13.0-SNAPSHOT`);
-- the IdentityHub + IssuerService images are built from [tractusx-identityhub **PR #309**](https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309) (the EDC 0.17.0 upgrade).
+> **Path to merge:** ship `tractusx-connector 0.13.0` → merge IH #309 → bump the
+> bundle `Chart.yaml` pins to the released versions and delete the overlay (and
+> its guard) → merge this umbrella change. Until then, build the two images sets
+> from source and load them into your cluster as below.
 
-To run the validated flow today, layer the local-image overlay
-[`values-test-data-exchange-identity-hub-local-0.17.0.yaml`](../../../../charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml),
-which pins those images. They must be **pre-loaded into the cluster** (not on a
-public registry) — e.g. for kind:
+### Build the in-flight images from source
+
+Prerequisites: **JDK 21**, Docker, and a local clone of each repo. (Building is a
+one-time step; the images are then reused across installs.)
+
+**1. Connector control/data planes — from `tractusx-edc` `main` (EDC 0.17.0):**
+
+```bash
+git clone https://github.com/eclipse-tractusx/tractusx-edc.git
+cd tractusx-edc                                   # main = 0.13.0-SNAPSHOT (EDC 0.17.0)
+
+# The `dockerize` task (registered in the root build.gradle.kts) builds each
+# runtime image as <module-name>:<version> (+ :latest). JDK 21 is required.
+./gradlew -x test \
+  :edc-controlplane:edc-controlplane-postgresql-hashicorp-vault:dockerize \
+  :edc-dataplane:edc-dataplane-hashicorp-vault:dockerize
+
+# Retag to the names the overlay pins:
+docker tag edc-controlplane-postgresql-hashicorp-vault:0.13.0-SNAPSHOT \
+           tractusx/edc-controlplane-postgresql-hashicorp-vault:0.13.0-SNAPSHOT
+docker tag edc-dataplane-hashicorp-vault:0.13.0-SNAPSHOT \
+           tractusx/edc-dataplane-hashicorp-vault:0.13.0-SNAPSHOT
+```
+
+**2. IdentityHub + IssuerService — from `tractusx-identityhub` PR #309:**
+
+```bash
+git clone https://github.com/eclipse-tractusx/tractusx-identityhub.git
+cd tractusx-identityhub
+git fetch origin pull/309/head:pr-309 && git checkout pr-309   # EDC 0.17.0 upgrade
+
+# Build the three runtime images (module → image, named after the runtime):
+./gradlew -x test \
+  :runtimes:identityhub:dockerize \
+  :runtimes:identityhub-memory:dockerize \
+  :runtimes:issuerservice:dockerize
+
+# Retag to the overlay's names (run `docker images` to confirm the produced
+# source tags first — they are named after the runtime module + version):
+docker tag identityhub-memory:latest docker-identityhub-memory:latest   # in-memory IH
+docker tag identityhub:latest        docker-identityhub:latest          # postgres IH
+docker tag issuerservice:latest      docker-issuerservice:latest        # issuer service
+```
+
+**3. Load all five images into your cluster** (kind shown; for minikube use
+`minikube image load <name>`):
 
 ```bash
 kind load docker-image \
@@ -75,8 +132,11 @@ kind load docker-image \
   --name <cluster>
 ```
 
-Once `tractusx-connector 0.13.0` and IdentityHub/IssuerService 0.17.0 are
-released, bump the bundle `Chart.yaml` pins and drop the overlay.
+Finally, layer the local-image overlay
+[`values-test-data-exchange-identity-hub-local-0.17.0.yaml`](../../../../charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml)
+(it pins these images, sets `pullPolicy: Never`, and carries the
+`wallet.identityHub.imagesOverridden` sentinel that satisfies the render guard)
+on every install — see [Single-command deploy](#single-command-deploy).
 
 ## Prerequisites
 
@@ -114,18 +174,38 @@ or `…-postgres.yaml` (persistent IH) to deploy the other topologies. The
 ## Verifying the seed
 
 ```bash
-kubectl -n umbrella logs job/umbrella-dataprovider-post-install-identityhub-seed | grep "SEED SUMMARY"
+kubectl -n umbrella logs job/umbrella-dataprovider-post-install-identityhub-seed | grep -A6 "SEED SUMMARY"
 # [ih-seed]  SEED SUMMARY: 4 participants provisioned successfully
+#   ...
+#   Credential issuance (§8/§9): 16 ISSUED, 0 NOT issued
+#   All declared credentials reached ISSUED.
 ```
 
-Each of the four participants should hold four ISSUED credentials. With the
-postgres IH you can confirm directly:
+The SEED SUMMARY now reports issuance **loudly**: it lists `N ISSUED, M NOT
+issued` and, if any are missing, prints each one as `*** PARTIAL ISSUANCE ***`.
+Each of the four participants should hold four ISSUED credentials (16 total).
+Tuning knobs (under `wallet.identityHubSeed` / `wallet`):
+
+| Value                              | Default | Purpose                                                              |
+| ---------------------------------- | ------- | ------------------------------------------------------------------- |
+| `credentialPollTimeoutSeconds`     | `120`   | how long to poll each credential for state ISSUED (postgres is slow) |
+| `strictIssuance`                   | `false` | when `true`, the Job **fails** if any credential is not ISSUED       |
+| `wallet.frameworkContractVersion`  | `"1.0"` | version baked into the framework/governance VCs (must match the policy) |
+
+With the postgres IH you can confirm issuance directly:
 
 ```bash
 kubectl -n umbrella exec umbrella-identityhub-postgresql-0 -- sh -c \
   'PGPASSWORD=password psql -U user -d ih -tAc \
    "SELECT participant_context_id, count(*) FROM credential_resource GROUP BY 1 ORDER BY 1;"'
 ```
+
+The seed Job is **idempotent**: re-running it (e.g. via `helm upgrade`, or
+manually after a restart — see [Re-seeding](#re-seeding-after-a-pod-restart))
+tolerates HTTP 409 on every existing ParticipantContext / holder, and a repeated
+credential request re-hits the holder-request primary key as a soft no-op. So a
+re-seed only fills in what is missing; it never errors on already-provisioned
+state.
 
 ## End-to-end data transfer check (DCP) — Test Case 1
 
@@ -137,6 +217,15 @@ consumer data plane — run the smoke test:
 # kind with host ports 80/443 mapped:
 INGRESS_IP=127.0.0.1 ./hack/dcp-data-transfer-smoke.sh
 ```
+
+> **First transfer after a fresh install may need a retry.** The connector
+> resolves the provider BPN→DID through BDRS **asynchronously**, and the very
+> first negotiation can finish before that lookup populates the `BdrsClient`
+> cache — the transfer then fails once with `transfer:edr-cache` ("No BPN entry
+> found for agreement"). The smoke test already re-negotiates once to warm the
+> cache, so it self-heals; a manual (e.g. Bruno) run may need a single retry.
+> This is an upstream connector timing gap (async BPN resolution vs. terminal
+> transfer state), not an umbrella misconfiguration — see *Known limitations* L2.
 
 A green run ends with `FULL DCP DATA TRANSFER SUCCEEDED` and proves a consumer
 fetched a provider asset entirely over DCP — i.e. Test Case 1 from #1609. The
@@ -176,17 +265,46 @@ agreement"), then passes on re-run.** This is the cold-BDRS-cache race (see
 *Known limitations* L2). The smoke test already re-negotiates once to warm the
 cache; a manual Bruno run may need a single retry of the transfer.
 
-**Seed `WARN: … never reached ISSUED … after 40s` on the postgres IH.** The
-postgres IH issues a little slower than the seed's poll window; the credentials
-still land. Confirm with the `credential_resource` query above.
+**Seed SUMMARY reports `PARTIAL ISSUANCE` / `WARN: … never reached ISSUED …`
+on the postgres IH.** The postgres IH issues more slowly than the in-memory one.
+The credentials usually still land — confirm with the `credential_resource`
+query above. If they consistently lag, raise
+`wallet.identityHubSeed.credentialPollTimeoutSeconds` (default `120`). Set
+`strictIssuance: true` to make the Job fail instead of warn on a partial seed.
+
+**`helm install` fails: "wallet.mode=identityHub needs the EDC-0.17.0-aligned
+images …".** The version-mismatch guard fired because the local-image overlay
+was not layered. Add `-f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml`
+(and pre-load the images — see [Version requirement](#version-requirement)).
+
+### Re-seeding after a pod restart
+
+The in-memory IH (shared / per-participant) and the in-memory BDRS lose their
+state when their pod restarts; the post-install hooks only run on
+install/upgrade. To restore a running cluster **without reinstalling**, re-run
+the two seed hooks (both are idempotent):
+
+```bash
+# 1. Re-provision IdentityHub ParticipantContexts + credentials:
+kubectl -n umbrella delete job umbrella-dataprovider-post-install-identityhub-seed 2>/dev/null || true
+helm upgrade umbrella charts/umbrella --namespace umbrella --reuse-values \
+  -f charts/values-test-data-exchange-identity-hub.yaml \
+  -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml
+
+# 2. (in-memory BDRS only) confirm the directory was re-seeded:
+kubectl -n umbrella logs job/umbrella-post-install-bdrs-setup | tail -5
+```
+
+The **postgres** profile avoids step 1 entirely — its ParticipantContexts and
+credentials persist across IdentityHub pod restarts (see *Known limitations* L3).
 
 ## Known limitations
 
 | ID  | Limitation                                                                                          | Workaround / status                                                                                          |
 |-----|-----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| L1  | The validated flow needs the EDC-0.17.0 stack, not yet on a public release channel.                 | Use the `-local-0.17.0` overlay with pre-loaded images (see [Version requirement](#version-requirement)).    |
-| L2  | First negotiation after a fresh install can lose a race against the connector's async BDRS lookup.  | Transient; the smoke test auto-retries. Subsequent transfers reuse the warmed BdrsClient cache.              |
-| L3  | The in-memory IH (shared / per-participant) loses ParticipantContexts + credentials on pod restart. | Re-seed (re-run the seed Job) after a restart, or use the **postgres** profile (state persists).             |
+| L1  | The validated flow needs the EDC-0.17.0 stack, not yet on a public release channel.                 | Use the `-local-0.17.0` overlay with built-from-source images (see [Version requirement](#version-requirement)). |
+| L2  | First negotiation after a fresh install can lose a race against the connector's **async** BDRS lookup. | Transient; the smoke test auto-retries and subsequent transfers reuse the warmed BdrsClient cache. Upstream connector timing gap (async BPN resolution vs. terminal transfer state) — to be filed against [tractusx-edc](https://github.com/eclipse-tractusx/tractusx-edc/issues); no umbrella-side fix. |
+| L3  | The in-memory IH (shared / per-participant) and in-memory BDRS lose state on pod restart.            | [Re-seed](#re-seeding-after-a-pod-restart) after a restart, or use the **postgres** profile (SQL state persists; key durability is still bounded by the shared dev-mode Vault). |
 | L4  | The per-participant profile runs four IdentityHub JVMs (~7 GiB).                                     | Use the shared profile for light testing; disable `dataconsumerTwo` + `identity-hub-consumer2` on small nodes.|
 
 ## Teardown
