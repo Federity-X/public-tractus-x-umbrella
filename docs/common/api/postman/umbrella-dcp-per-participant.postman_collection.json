@@ -1,0 +1,582 @@
+{
+  "info": {
+    "_postman_id": "7670f50b-cb93-4da5-865d-747fd238340c",
+    "name": "Umbrella DCP Data Transfer - Per-Participant IdentityHub",
+    "description": "End-to-end Decentralized Claims Protocol (DCP) data-transfer demonstration for the Tractus-X umbrella IdentityHub PER-PARTICIPANT profile (charts/values-test-data-exchange-identity-hub-per-participant.yaml): provider and consumer1 each on their own IdentityHub.\\n\\nRun the 11 requests in order (or use the Collection Runner with a ~2000ms delay). The provider provisions data/asset/policies/contract; the consumer runs catalog -> negotiation -> transfer -> fetch. Variables are threaded automatically by the test scripts (offerId -> negotiationId -> transferProcessId -> EDR endpoint+token). Steps 8/9/10 self-poll via setNextRequest; step 9 re-negotiates once on the cold-BDRS-cache race (matches hack/dcp-data-transfer-smoke.sh). A green run ends with the fetched payload containing the data marker.\\n\\nSelect the 'umbrella DCP per-participant (kind)' environment. For the SHARED or POSTGRES profile, change only providerDid to did:web:identity-hub.tx.test:BPNL00000003AYRE. SPDX-License-Identifier: CC-BY-4.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Seed Submodel Data (provider)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Fresh run: unique ids + reset all poll/retry counters.",
+              "const rid = String(Date.now());",
+              "pm.collectionVariables.set('runId', rid);",
+              "pm.collectionVariables.set('assetId', 'pm-asset-' + rid);",
+              "pm.collectionVariables.set('accessPolicyId', 'pm-access-' + rid);",
+              "pm.collectionVariables.set('usagePolicyId', 'pm-usage-' + rid);",
+              "pm.collectionVariables.set('contractId', 'pm-contract-' + rid);",
+              "['offerId','negotiationId','transferProcessId','edrEndpoint','edrToken'].forEach(k => pm.collectionVariables.set(k, ''));",
+              "['negPollCount','edrPollCount','daPollCount','negRetry'].forEach(k => pm.collectionVariables.set(k, 0));",
+              "console.log('=== new run', rid, '===');"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('submodel data stored (2xx)', function () { pm.expect(pm.response.code).to.be.within(200,299); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{providerSubmodel}}/{{dataPath}}",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"parentParts\": [{\n    \"validityPeriod\": {\"validFrom\": \"2023-03-21T08:47:14.438+01:00\", \"validTo\": \"2024-08-02T09:00:00.000+01:00\"},\n    \"parentCatenaXId\": \"urn:uuid:0733946c-59c6-41ae-9570-cb43a6e4c79e\",\n    \"quantity\": {\"quantityNumber\": 2.5, \"measurementUnit\": \"unit:litre\"},\n    \"createdOn\": \"2022-02-03T14:48:54.709Z\", \"lastModifiedOn\": \"2022-02-03T14:48:54.709Z\"\n  }],\n  \"catenaXId\": \"{{dataMarker}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "2. Create Asset (provider)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('asset created (2xx or 409)', function () {",
+              "  pm.expect([200,201,204,409]).to.include(pm.response.code);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Api-Key",
+            "value": "{{providerApiKey}}"
+          }
+        ],
+        "url": "{{providerMgmt}}/assets",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\", \"edc\": \"https://w3id.org/edc/v0.0.1/ns/\",\n    \"tx\": \"https://w3id.org/tractusx/v0.0.1/ns/\", \"cx-policy\": \"https://w3id.org/catenax/policy/\",\n    \"odrl\": \"http://www.w3.org/ns/odrl/2/\"},\n  \"@id\": \"{{assetId}}\",\n  \"properties\": {\"description\": \"DCP per-participant smoke-test asset\"},\n  \"dataAddress\": {\"@type\": \"DataAddress\", \"type\": \"HttpData\", \"proxyPath\": \"true\",\n    \"proxyMethod\": \"true\", \"proxyQueryParams\": \"true\", \"proxyBody\": \"true\",\n    \"baseUrl\": \"{{providerSubmodel}}\"}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "3. Create Access Policy (provider)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('access policy created (2xx or 409)', function () {",
+              "  pm.expect([200,201,204,409]).to.include(pm.response.code);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Api-Key",
+            "value": "{{providerApiKey}}"
+          }
+        ],
+        "url": "{{providerMgmt}}/policydefinitions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": [\"https://w3id.org/dspace/2025/1/odrl-profile.jsonld\",\n    \"https://w3id.org/catenax/2025/9/policy/context.jsonld\",\n    {\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"}],\n  \"@id\": \"{{accessPolicyId}}\", \"@type\": \"PolicyDefinition\",\n  \"policy\": {\"@type\": \"Set\", \"permission\": [{\"action\": \"access\", \"constraint\": [{\"and\": [\n    {\"leftOperand\": \"Membership\", \"operator\": \"eq\", \"rightOperand\": \"active\"},\n    {\"leftOperand\": \"FrameworkAgreement\", \"operator\": \"eq\", \"rightOperand\": \"{{frameworkAgreement}}\"},\n    {\"leftOperand\": \"BusinessPartnerNumber\", \"operator\": \"isAnyOf\", \"rightOperand\": [\"{{consumerBpn}}\"]}\n  ]}]}]}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "4. Create Usage Policy (provider)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('usage policy created (2xx or 409)', function () {",
+              "  pm.expect([200,201,204,409]).to.include(pm.response.code);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Api-Key",
+            "value": "{{providerApiKey}}"
+          }
+        ],
+        "url": "{{providerMgmt}}/policydefinitions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": [\"https://w3id.org/dspace/2025/1/odrl-profile.jsonld\",\n    \"https://w3id.org/catenax/2025/9/policy/context.jsonld\",\n    {\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"}, {}],\n  \"@type\": \"PolicyDefinition\", \"@id\": \"{{usagePolicyId}}\",\n  \"policy\": {\"@type\": \"Set\", \"permission\": [{\"action\": \"use\", \"constraint\": {\"and\": [\n    {\"leftOperand\": \"Membership\", \"operator\": \"eq\", \"rightOperand\": \"active\"},\n    {\"leftOperand\": \"FrameworkAgreement\", \"operator\": \"eq\", \"rightOperand\": \"{{frameworkAgreement}}\"},\n    {\"leftOperand\": \"UsagePurpose\", \"operator\": \"isAnyOf\", \"rightOperand\": [\"{{usagePurpose}}\"]}\n  ]}}], \"prohibition\": [], \"obligation\": []}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "5. Create Contract Definition (provider)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('contract definition created (2xx or 409)', function () {",
+              "  pm.expect([200,201,204,409]).to.include(pm.response.code);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Api-Key",
+            "value": "{{providerApiKey}}"
+          }
+        ],
+        "url": "{{providerMgmt}}/contractdefinitions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\"edc\": \"https://w3id.org/edc/v0.0.1/ns/\"},\n  \"@id\": \"{{contractId}}\", \"@type\": \"ContractDefinition\",\n  \"accessPolicyId\": \"{{accessPolicyId}}\", \"contractPolicyId\": \"{{usagePolicyId}}\",\n  \"assetsSelector\": [{\"@type\": \"CriterionDto\",\n    \"operandLeft\": \"https://w3id.org/edc/v0.0.1/ns/id\", \"operator\": \"=\", \"operandRight\": \"{{assetId}}\"}]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "6. Request Catalog (consumer)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('catalog 2xx (DCP auth + VP presentation worked)', function () {",
+              "  pm.expect(pm.response.code, 'catalog returned ' + pm.response.code).to.be.within(200,299);",
+              "});",
+              "let j = {}; try { j = pm.response.json(); } catch (e) {}",
+              "let ds = j.dataset; if (Array.isArray(ds)) ds = ds[0];",
+              "let hp = ds && ds.hasPolicy; if (Array.isArray(hp)) hp = hp[0];",
+              "const offerId = hp && hp['@id'];",
+              "pm.test('offer advertised for asset (policy matched)', function () {",
+              "  pm.expect(offerId, 'no offer for asset - contract definition/policy not matched').to.be.a('string').and.to.have.length.above(0);",
+              "});",
+              "if (offerId) { pm.collectionVariables.set('offerId', offerId); console.log('offerId =', offerId); }"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Api-Key",
+            "value": "{{consumerApiKey}}"
+          }
+        ],
+        "url": "{{consumerMgmt}}/catalog/request",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": [{\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"}],\n  \"@type\": \"CatalogRequest\",\n  \"counterPartyAddress\": \"{{providerDsp}}/{{dspVersion}}\",\n  \"counterPartyId\": \"{{providerDid}}\",\n  \"protocol\": \"{{protocol}}\",\n  \"querySpec\": {\"offset\": 0, \"limit\": 50, \"filterExpression\": [\n    {\"operandLeft\": \"https://w3id.org/edc/v0.0.1/ns/id\", \"operator\": \"=\", \"operandRight\": \"{{assetId}}\"}]}\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "7. Start EDR Negotiation (consumer)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('negotiation accepted (2xx)', function () {",
+              "  pm.expect(pm.response.code).to.be.within(200,299);",
+              "});",
+              "const j = pm.response.json();",
+              "const negId = j['@id'];",
+              "pm.test('negotiation @id present', function () {",
+              "  pm.expect(negId).to.be.a('string').and.to.have.length.above(0);",
+              "});",
+              "pm.collectionVariables.set('negotiationId', negId);",
+              "// reset the per-attempt poll counters",
+              "pm.collectionVariables.set('negPollCount', 0);",
+              "pm.collectionVariables.set('edrPollCount', 0);",
+              "pm.collectionVariables.set('daPollCount', 0);",
+              "console.log('negotiationId =', negId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Api-Key",
+            "value": "{{consumerApiKey}}"
+          }
+        ],
+        "url": "{{consumerMgmt}}/edrs",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": [\"http://www.w3.org/ns/odrl.jsonld\",\n    \"https://w3id.org/catenax/2025/9/policy/context.jsonld\",\n    {\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"}],\n  \"@type\": \"ContractRequest\",\n  \"counterPartyAddress\": \"{{providerDsp}}/{{dspVersion}}\",\n  \"protocol\": \"{{protocol}}\",\n  \"policy\": {\"@id\": \"{{offerId}}\", \"@type\": \"Offer\", \"assigner\": \"{{providerDid}}\", \"target\": \"{{assetId}}\",\n    \"permission\": [{\"action\": \"use\", \"constraint\": [{\"and\": [\n      {\"leftOperand\": \"Membership\", \"operator\": \"eq\", \"rightOperand\": \"active\"},\n      {\"leftOperand\": \"FrameworkAgreement\", \"operator\": \"eq\", \"rightOperand\": \"{{frameworkAgreement}}\"},\n      {\"leftOperand\": \"UsagePurpose\", \"operator\": \"isAnyOf\", \"rightOperand\": \"{{usagePurpose}}\"}\n    ]}]}], \"prohibition\": [], \"obligation\": []},\n  \"callbackAddresses\": []\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "8. Poll Negotiation State (consumer)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const _setNext = (n) => { try { pm.execution.setNextRequest(n); } catch (e) { postman.setNextRequest(n); } };",
+              "const j = pm.response.json();",
+              "const state = j.state || j['edc:state'] || '';",
+              "const max = parseInt(pm.variables.get('maxPoll') || '40', 10);",
+              "let n = parseInt(pm.collectionVariables.get('negPollCount') || '0', 10) + 1;",
+              "pm.collectionVariables.set('negPollCount', n);",
+              "console.log('negotiation state =', state, '(' + n + '/' + max + ')');",
+              "if (state === 'FINALIZED') {",
+              "  pm.test('negotiation FINALIZED', function () { pm.expect(true).to.be.true; });",
+              "  // no setNextRequest -> Runner continues to the next request (Query Cached EDR)",
+              "} else if (state === 'TERMINATED' || state === 'ERROR') {",
+              "  pm.test('negotiation reached a non-terminal state', function () {",
+              "    pm.expect.fail('negotiation ' + state + ' - policy not satisfied / credential rejected');",
+              "  });",
+              "  _setNext(null);",
+              "} else if (n < max) {",
+              "  _setNext('8. Poll Negotiation State (consumer)');",
+              "} else {",
+              "  pm.test('negotiation finalized within poll budget', function () {",
+              "    pm.expect.fail('negotiation did not finalize (last state ' + (state || 'unknown') + ')');",
+              "  });",
+              "  _setNext(null);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{consumerApiKey}}"
+          }
+        ],
+        "url": "{{consumerMgmt}}/contractnegotiations/{{negotiationId}}"
+      }
+    },
+    {
+      "name": "9. Query Cached EDR (consumer)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const _setNext = (n) => { try { pm.execution.setNextRequest(n); } catch (e) { postman.setNextRequest(n); } };",
+              "let r = {}; try { r = pm.response.json(); } catch (e) {}",
+              "if (Array.isArray(r)) r = r[0] || {};",
+              "const tp = r.transferProcessId || r['tx:transferProcessId'];",
+              "const maxEdr = parseInt(pm.variables.get('maxEdrPoll') || '10', 10);",
+              "const maxNegRetry = parseInt(pm.variables.get('maxNegRetry') || '2', 10);",
+              "let p = parseInt(pm.collectionVariables.get('edrPollCount') || '0', 10) + 1;",
+              "pm.collectionVariables.set('edrPollCount', p);",
+              "if (tp) {",
+              "  pm.collectionVariables.set('transferProcessId', tp);",
+              "  pm.collectionVariables.set('daPollCount', 0);",
+              "  pm.test('EDR cached (transfer started)', function () { pm.expect(true).to.be.true; });",
+              "  console.log('transferProcessId =', tp);",
+              "  // continue to next request (Get EDR Data Address)",
+              "} else if (p < maxEdr) {",
+              "  console.log('EDR not cached yet (' + p + '/' + maxEdr + ') - polling');",
+              "  _setNext('9. Query Cached EDR (consumer)');",
+              "} else {",
+              "  let nr = parseInt(pm.collectionVariables.get('negRetry') || '0', 10) + 1;",
+              "  pm.collectionVariables.set('negRetry', nr);",
+              "  if (nr < maxNegRetry) {",
+              "    console.log('no EDR after ' + maxEdr + ' polls - cold-BDRS-cache race; re-negotiating (retry ' + nr + ')');",
+              "    _setNext('7. Start EDR Negotiation (consumer)');",
+              "  } else {",
+              "    pm.test('EDR appeared in cache', function () {",
+              "      pm.expect.fail('no EDR after ' + maxNegRetry + ' negotiations - transfer kept terminating (check provider for \"No BPN entry found\")');",
+              "    });",
+              "    _setNext(null);",
+              "  }",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Api-Key",
+            "value": "{{consumerApiKey}}"
+          }
+        ],
+        "url": "{{consumerMgmt}}/edrs/request",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"},\n  \"@type\": \"QuerySpec\",\n  \"filterExpression\": [{\"operandLeft\": \"contractNegotiationId\", \"operator\": \"=\", \"operandRight\": \"{{negotiationId}}\"}]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "10. Get EDR Data Address (consumer)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const _setNext = (n) => { try { pm.execution.setNextRequest(n); } catch (e) { postman.setNextRequest(n); } };",
+              "let j = {}; try { j = pm.response.json(); } catch (e) {}",
+              "const endpoint = j.endpoint;",
+              "const token = j.authorization;",
+              "const max = parseInt(pm.variables.get('maxPoll') || '40', 10);",
+              "let n = parseInt(pm.collectionVariables.get('daPollCount') || '0', 10) + 1;",
+              "pm.collectionVariables.set('daPollCount', n);",
+              "if (endpoint && token) {",
+              "  pm.collectionVariables.set('edrEndpoint', endpoint);",
+              "  pm.collectionVariables.set('edrToken', token);",
+              "  pm.test('EDR data address + token resolved', function () { pm.expect(true).to.be.true; });",
+              "  console.log('edrEndpoint =', endpoint);",
+              "} else if (n < max) {",
+              "  console.log('EDR data address not ready yet (' + n + '/' + max + ') - polling');",
+              "  _setNext('10. Get EDR Data Address (consumer)');",
+              "} else {",
+              "  pm.test('EDR data address resolved', function () {",
+              "    pm.expect.fail('could not resolve EDR endpoint/token for the transfer process');",
+              "  });",
+              "  _setNext(null);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Api-Key",
+            "value": "{{consumerApiKey}}"
+          }
+        ],
+        "url": "{{consumerMgmt}}/edrs/{{transferProcessId}}/dataaddress?auto_refresh=true"
+      }
+    },
+    {
+      "name": "11. Fetch Asset Data (consumer data plane)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('data fetch 2xx', function () { pm.expect(pm.response.code).to.be.within(200,299); });",
+              "const marker = pm.variables.get('dataMarker');",
+              "const body = pm.response.text();",
+              "pm.test('payload contains the data marker (real end-to-end transfer)', function () {",
+              "  pm.expect(body).to.include(marker);",
+              "});",
+              "if (pm.response.code < 300 && body.indexOf(marker) >= 0) {",
+              "  console.log('FULL DCP DATA TRANSFER SUCCEEDED - consumer fetched the provider asset over DCP.');",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{edrToken}}"
+          }
+        ],
+        "url": "{{edrEndpoint}}/{{dataPath}}"
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "runId",
+      "value": ""
+    },
+    {
+      "key": "assetId",
+      "value": ""
+    },
+    {
+      "key": "accessPolicyId",
+      "value": ""
+    },
+    {
+      "key": "usagePolicyId",
+      "value": ""
+    },
+    {
+      "key": "contractId",
+      "value": ""
+    },
+    {
+      "key": "offerId",
+      "value": ""
+    },
+    {
+      "key": "negotiationId",
+      "value": ""
+    },
+    {
+      "key": "transferProcessId",
+      "value": ""
+    },
+    {
+      "key": "edrEndpoint",
+      "value": ""
+    },
+    {
+      "key": "edrToken",
+      "value": ""
+    },
+    {
+      "key": "negPollCount",
+      "value": "0"
+    },
+    {
+      "key": "edrPollCount",
+      "value": "0"
+    },
+    {
+      "key": "daPollCount",
+      "value": "0"
+    },
+    {
+      "key": "negRetry",
+      "value": "0"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Optional: when `ingressIp` is set, connect to that IP and carry the real",
+          "// vhost as a Host header (ingress-nginx routes by Host). Lets the collection",
+          "// run without /etc/hosts entries, mirroring the smoke test's INGRESS_IP.",
+          "const ip = pm.variables.get('ingressIp');",
+          "if (ip) {",
+          "  const resolved = pm.variables.replaceIn(pm.request.url.toString());",
+          "  const m = resolved.match(/^(https?):\\/\\/([^\\/:]+)(?::(\\d+))?([\\s\\S]*)$/);",
+          "  if (m && m[2] !== ip) {",
+          "    pm.request.headers.upsert({ key: 'Host', value: m[2] });",
+          "    pm.request.url = m[1] + '://' + ip + (m[3] ? ':' + m[3] : '') + (m[4] || '');",
+          "  }",
+          "}"
+        ]
+      }
+    }
+  ]
+}
