@@ -55,9 +55,14 @@
 
    Idempotency: every POST tolerates HTTP 409 (already-exists).
    Failure semantics: setup + steps 2/3/5/6/7 are strict (any ≥400 fails the
-   Job). Steps 8/9 (credentials request + retrieve) remain best-effort and
-   only emit warnings — the DCP exchange depends on did:web resolution and
-   STS keying that may not be wired correctly on every cluster. The
+   Job). Steps 8/9 (credentials request + retrieve) are best-effort by default
+   — the DCP exchange depends on did:web resolution and STS keying that may not
+   be wired correctly on every cluster — but the final SEED SUMMARY now always
+   reports issuance loudly (`N ISSUED, M NOT issued`, listing each miss), and
+   setting `wallet.identityHubSeed.strictIssuance=true` turns any miss into a
+   Job failure. The per-credential poll window is configurable via
+   `wallet.identityHubSeed.credentialPollTimeoutSeconds` (default 120s) — the
+   postgres IssuerService issues more slowly than the in-memory one. The
    `database` attestation in §5 is now reliable because we deploy the
    upstream **postgres** IssuerService image (`tractusx-issuerservice`),
    which bundles the `issuerservice-database-attestations` extension; the
@@ -114,6 +119,17 @@ spec:
               value: {{ $seed.issuerServicePodLabel | quote }}
             - name: READINESS_TIMEOUT
               value: {{ $seed.readinessTimeoutSeconds | quote }}
+            # Max seconds to wait for EACH credential to reach state ISSUED
+            # after the DCP request. The postgres IssuerService issues more
+            # slowly than the in-memory one, so this must be generous enough
+            # to avoid a false "never reached ISSUED" WARN.
+            - name: CRED_POLL_TIMEOUT
+              value: {{ $seed.credentialPollTimeoutSeconds | default 120 | quote }}
+            # When "true" the Job exits non-zero if ANY declared credential
+            # did not reach ISSUED (opt-in; default keeps issuance best-effort
+            # so a cluster-specific DCP wiring issue does not block install).
+            - name: STRICT_ISSUANCE
+              value: {{ $seed.strictIssuance | default false | quote }}
           command: ["/bin/bash", "-eu", "-o", "pipefail", "-c"]
           args:
             - |
@@ -131,6 +147,21 @@ spec:
               # APIs — URL paths now use the PLAIN id. Keep the var name (used in all
               # downstream path interpolations) but assign the plain id.
               ISSUER_PID_B64="$ISSUER_PID"
+              # Framework-agreement contract version embedded in the
+              # DataExchangeGovernance/FrameworkAgreement credentials. Provided
+              # by the umbrella `*-wallet-mode` ConfigMap from
+              # .Values.wallet.frameworkContractVersion (single source of truth)
+              # so it stays in lock-step with the dataspace access/usage
+              # policies. The cx-policy FrameworkAgreementConstraintFunction does
+              # an EXACT string match on the version after ':', so a silent
+              # default here would break negotiation invisibly — fail fast if the
+              # ConfigMap did not carry it.
+              FRAMEWORK_CONTRACT_VERSION=$(cat /etc/wallet/framework-contract-version 2>/dev/null || true)
+              if [ -z "$FRAMEWORK_CONTRACT_VERSION" ]; then
+                echo "[ih-seed] FATAL: framework-contract-version missing from the wallet-mode ConfigMap" >&2
+                echo "[ih-seed]        (expected .Values.wallet.frameworkContractVersion to be set)" >&2
+                exit 1
+              fi
 
               echo "[ih-seed] identity-hub identity API     = $IH_IDENTITY"
               echo "[ih-seed] identity-hub credentials API  = $IH_CREDENTIALS"
@@ -415,6 +446,20 @@ spec:
                     printf '%s' "$base" ;;
                 esac
               }
+              # Guard: only the four cx-policy-relevant credential types have
+              # been given a schema + per-type subject mappings above. An
+              # unrecognised type would silently fall through to the bare
+              # {id,holderIdentifier} subject — a thin credential the catalog
+              # policy cannot evaluate (the exact bug this enrichment fixed).
+              # Fail loudly instead so a new type is wired correctly first.
+              cred_type_known() {
+                case "$1" in
+                  MembershipCredential|BpnCredential|DataExchangeGovernanceCredential|FrameworkAgreementCredential)
+                    return 0 ;;
+                  *)
+                    return 1 ;;
+                esac
+              }
 
               ########################################################
               # SETUP: bootstrap the IssuerService's own ParticipantContext.
@@ -490,13 +535,8 @@ spec:
               # `issuerservice-holder-attestations` extension that registers
               # the "holder" attestation type.
               ########################################################
-              # Framework-agreement contract version embedded in the
-              # DataExchangeGovernance/FrameworkAgreement credentials. MUST match
-              # the version used in the dataspace access/usage policies'
-              # `FrameworkAgreement eq DataExchangeGovernance:<version>` constraint
-              # (the cx-policy FrameworkAgreementConstraintFunction does an exact
-              # string match on the version after ':').
-              FRAMEWORK_CONTRACT_VERSION="1.0"
+              # (FRAMEWORK_CONTRACT_VERSION is sourced at the top of the script
+              # from the wallet-mode ConfigMap — single source of truth.)
               HOLDER_ATTESTATION_ID="holder-properties-attestation"
               HOLDER_ATTESTATION_BODY=$(cat <<JSON
               {
@@ -523,6 +563,13 @@ spec:
               ########################################################
               jq -r '.[]' /etc/wallet/credential-types.json | while read -r CRED_TYPE; do
                 [ -z "$CRED_TYPE" ] && continue
+                if ! cred_type_known "$CRED_TYPE"; then
+                  echo "[ih-seed] FATAL: unsupported credential type '$CRED_TYPE' declared in wallet.participants[].credentials" >&2
+                  echo "[ih-seed]   known: MembershipCredential | BpnCredential | DataExchangeGovernanceCredential | FrameworkAgreementCredential" >&2
+                  echo "[ih-seed]   Add its schema + subject mappings to cred_schema_for / cred_mappings_for / cred_attestations_for" >&2
+                  echo "[ih-seed]   before declaring it, or it will issue a thin credential the catalog policy rejects." >&2
+                  exit 1
+                fi
                 CRED_ID=$(cred_def_id_for "$CRED_TYPE")
                 CRED_SCHEMA=$(cred_schema_for "$CRED_TYPE")
                 CRED_ATTESTATIONS=$(cred_attestations_for "$CRED_TYPE")
@@ -553,8 +600,23 @@ spec:
               # register it with IS.
               ########################################################
               # Track best-effort issuance outcomes for the SUMMARY line.
-              ISSUANCE_OK=0
-              ISSUANCE_WARN=0
+              # The per-participant loop runs in a piped subshell, so counters
+              # mutated inside it do NOT survive to the SUMMARY — record every
+              # outcome as a line in a temp file and tally it after the loop.
+              ISSUANCE_LOG=/tmp/issuance-outcomes.log
+              : > "$ISSUANCE_LOG"
+              # Poll budget (iterations of a 2s sleep) derived from the
+              # configurable CRED_POLL_TIMEOUT (round up). Validate it is a
+              # positive integer first — otherwise the arithmetic below aborts
+              # the Job (under `set -eu`) with an opaque error; fail fast with a
+              # clear message instead.
+              case "$CRED_POLL_TIMEOUT" in
+                ''|*[!0-9]*)
+                  echo "[ih-seed] FATAL: credentialPollTimeoutSeconds must be a positive integer (got '$CRED_POLL_TIMEOUT')" >&2
+                  exit 1 ;;
+              esac
+              POLL_ITERS=$(( (CRED_POLL_TIMEOUT + 1) / 2 ))
+              [ "$POLL_ITERS" -lt 1 ] && POLL_ITERS=1
 
               jq -r 'to_entries[] | @base64' /etc/wallet/participants.json | while read -r row; do
                 entry=$(echo "$row" | base64 -d)
@@ -727,7 +789,7 @@ spec:
                     #     nested under `.verifiableCredential.credential.type`.
                     # Accept both the new numeric/array shape and the legacy one.
                     ok=0
-                    for j in $(seq 1 20); do
+                    for j in $(seq 1 "$POLL_ITERS"); do
                       body=$(curl -sS \
                         -H "x-api-key: $CUR_IH_KEY" \
                         "$CUR_IH_IDENTITY/v1alpha/participants/$PART_B64/credentials" || echo '[]')
@@ -739,14 +801,20 @@ spec:
                             )' \
                            >/dev/null 2>&1; then
                         echo "[ih-seed] (D §9) $CRED_TYPE ISSUED for $PID (attempt $j)"
+                        echo "OK $PID $CRED_TYPE" >> "$ISSUANCE_LOG"
                         ok=1
                         break
                       fi
                       sleep 2
                     done
                     if [ "$ok" = "0" ]; then
-                      echo "[ih-seed] (D §9) WARN: $CRED_TYPE never reached ISSUED for $PID after 40s"
+                      echo "[ih-seed] (D §9) WARN: $CRED_TYPE never reached ISSUED for $PID after ${CRED_POLL_TIMEOUT}s"
+                      echo "WARN $PID $CRED_TYPE (never reached ISSUED within ${CRED_POLL_TIMEOUT}s)" >> "$ISSUANCE_LOG"
                     fi
+                  else
+                    # The credentials/request POST itself was rejected — record
+                    # it so the SUMMARY reflects a non-issued credential too.
+                    echo "WARN $PID $CRED_TYPE (credentials/request rejected)" >> "$ISSUANCE_LOG"
                   fi
                 done
 
@@ -757,12 +825,34 @@ spec:
               ########################################################
               PCOUNT=$(jq 'length' /etc/wallet/participants.json)
               CTYPES=$(jq -r '. | join(",")' /etc/wallet/credential-types.json)
+              # NB: `grep -c` prints "0" and exits 1 on no match — use `|| true`
+              # (NOT `|| echo 0`, which would append a second line → "0\n0" and
+              # break the integer tests below). Default empty (missing file) to 0.
+              ISSUED_OK=$(grep -c '^OK ' "$ISSUANCE_LOG" 2>/dev/null || true)
+              ISSUED_WARN=$(grep -c '^WARN ' "$ISSUANCE_LOG" 2>/dev/null || true)
+              ISSUED_OK=${ISSUED_OK:-0}
+              ISSUED_WARN=${ISSUED_WARN:-0}
               echo ""
               echo "[ih-seed] ================================================================"
               echo "[ih-seed]  SEED SUMMARY: $PCOUNT participants provisioned successfully"
               echo "[ih-seed]  (issuer=$ISSUER_PID activated, all holders created+activated+registered)"
               echo "[ih-seed]  credentialDefinitions configured: $CTYPES"
-              echo "[ih-seed]  Credential issuance (§8/§9) is best-effort; check WARN lines"
-              echo "[ih-seed]  above to assess DCP exchange readiness on this cluster."
+              echo "[ih-seed]  Credential issuance (§8/§9): ${ISSUED_OK} ISSUED, ${ISSUED_WARN} NOT issued"
+              if [ "$ISSUED_WARN" -gt 0 ]; then
+                echo "[ih-seed]  *** PARTIAL ISSUANCE — ${ISSUED_WARN} credential(s) did not reach ISSUED: ***"
+                grep '^WARN ' "$ISSUANCE_LOG" | sed 's/^WARN /[ih-seed]    - /'
+                echo "[ih-seed]  Re-running the seed (helm upgrade) re-attempts only the missing ones."
+                echo "[ih-seed]  If this persists, raise CRED_POLL_TIMEOUT (currently ${CRED_POLL_TIMEOUT}s) or"
+                echo "[ih-seed]  check IssuerService logs / DCP wiring on this cluster."
+              else
+                echo "[ih-seed]  All declared credentials reached ISSUED."
+              fi
               echo "[ih-seed] ================================================================"
+
+              # Opt-in strict mode: fail the Job on partial issuance so CI / a
+              # gated install does not report success with missing credentials.
+              if [ "$STRICT_ISSUANCE" = "true" ] && [ "$ISSUED_WARN" -gt 0 ]; then
+                echo "[ih-seed] FATAL: strictIssuance=true and ${ISSUED_WARN} credential(s) not ISSUED — failing Job." >&2
+                exit 1
+              fi
 {{- end }}

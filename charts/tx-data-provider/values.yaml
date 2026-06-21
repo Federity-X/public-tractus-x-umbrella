@@ -60,6 +60,16 @@ wallet:
     issuerServicePodLabel: "app.kubernetes.io/name=issuer-service"
     # Maximum seconds to wait for IH/IS pods to become Ready before seeding.
     readinessTimeoutSeconds: 300
+    # Maximum seconds to poll for EACH credential to reach state ISSUED after
+    # the DCP issuance request. The postgres IssuerService issues noticeably
+    # slower than the in-memory variant, so keep this generous.
+    credentialPollTimeoutSeconds: 120
+    # When true, the seed Job exits non-zero if ANY declared credential did not
+    # reach ISSUED. Default false keeps issuance best-effort (a cluster-specific
+    # DCP wiring problem is surfaced loudly in the SEED SUMMARY but does not
+    # block the install). Set true in CI / gated installs that must guarantee
+    # full issuance.
+    strictIssuance: false
 secrets:
   edc-wallet-secret: changeme
 

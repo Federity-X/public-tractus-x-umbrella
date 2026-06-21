@@ -46,6 +46,15 @@ wallet:
   # and used as issuer DID by Portal, Credential Issuer, and all EDCs.
   operatorBpn: "BPNL00000003CRHK"
 
+  # Framework-agreement contract version embedded in the
+  # DataExchangeGovernance / FrameworkAgreement credentials issued by the seed
+  # Job. This MUST match the version in the dataspace access/usage policies'
+  # `FrameworkAgreement eq DataExchangeGovernance:<version>` constraint — the
+  # cx-policy FrameworkAgreementConstraintFunction does an EXACT string match on
+  # the version after ':', so a mismatch silently breaks contract negotiation.
+  # Surfaced to the seed Job via the `<release>-wallet-mode` ConfigMap.
+  frameworkContractVersion: "1.0"
+
   # ---------------------------------------------------------------------------
   # Single source of truth for participants (§5 Phase A of the #1609 plan).
   #
@@ -127,6 +136,13 @@ wallet:
   #                 NOT depend on ingress working.
   identityHub:
     topology: shared
+    # TEMPORARY (#1609 demonstration era): sentinel proving the EDC-0.17.0-aligned
+    # local-image overlay is layered. The render fails when wallet.mode=identityHub
+    # without it (see templates/_wallet-validate.tpl → validateIdentityHubImageOverlay),
+    # because the released 0.16.0 pins cannot complete the DCP transfer. The overlay
+    # `values-test-data-exchange-identity-hub-local-0.17.0.yaml` sets this true.
+    # Remove both once connector 0.13.0 + IH/IS 0.17.0 are released and pinned.
+    imagesOverridden: false
     shared:
       # Public (ingress) identity — used for did:web documents.
       host: "identity-hub.tx.test"

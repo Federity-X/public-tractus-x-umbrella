@@ -11,6 +11,7 @@
 # wallet.mode out of sync with the enabled chart) fail fast with a clear
 # message.
 {{- include "umbrella.validateWallet" . }}
+{{- include "umbrella.validateIdentityHubImageOverlay" . }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -25,6 +26,10 @@ data:
   wallet-mode: {{ .Values.wallet.mode | default "stub" | quote }}
   operator-bpn: {{ .Values.wallet.operatorBpn | default "" | quote }}
 {{- if eq .Values.wallet.mode "identityHub" }}
+  # Framework-agreement contract version baked into the DataExchangeGovernance /
+  # FrameworkAgreement credentials. Single source of truth for the seed Job;
+  # MUST match the dataspace policy's FrameworkAgreement version (exact match).
+  framework-contract-version: {{ .Values.wallet.frameworkContractVersion | default "1.0" | quote }}
   # Public (ingress) URLs — used for did:web resolution and EDC-to-EDC traffic.
   identity-hub-base-url: {{ .Values.wallet.identityHub.shared.baseUrl | quote }}
   identity-hub-identity-api: {{ printf "%s/api/identity" .Values.wallet.identityHub.shared.baseUrl | quote }}

@@ -17,19 +17,25 @@
 # SPDX-License-Identifier: Apache-2.0
 ###############################################################
 #
-# LOCAL-TESTING OVERLAY — pins the (currently UNRELEASED) EDC-0.17.0-aligned
-# images needed for the full DCP data-transfer flow, on top of the shared
-# Identity Hub profile. The full catalog -> negotiation -> transfer -> fetch
-# flow is validated on this stack; the released charts still pin the 0.16.0
-# line (connector 0.13.0-rc2, IH/IS v0.3.2), which cannot complete the transfer
-# (EDC 0.17.0 / IH #937 changed participantContextId URL handling to plain).
+# IN-FLIGHT IMAGE OVERLAY — pins the EDC-0.17.0-aligned images that power the
+# #1609 DCP data-transfer DEMONSTRATION, on top of any Identity Hub profile.
+# These are the in-flight upstream builds the umbrella PR deliberately rides to
+# PROVE the fix now (rather than wait for releases): the full catalog ->
+# negotiation -> transfer -> fetch flow is validated on this stack. The released
+# charts still pin the 0.16.0 line (connector 0.13.0-rc2, IH/IS v0.3.2), which
+# cannot complete the transfer (EDC 0.17.0 / IH #937 changed participantContextId
+# URL handling to plain) — a render guard (templates/_wallet-validate.tpl) fails
+# any identityHub install that omits this overlay, so the non-working stack is
+# never run silently.
 #
-# DELETE this overlay once tractusx-edc 0.13.0 (EDC 0.17.0) and
-# IdentityHub/IssuerService 0.17.0 are released and pinned in the bundle
-# Chart.yaml files.
+# Path to merge / removal: ship tractusx-edc 0.13.0 (EDC 0.17.0) -> merge
+# IdentityHub/IssuerService 0.17.0 (PR #309) -> bump the bundle Chart.yaml pins
+# to the released versions -> DELETE this overlay (and the guard sentinel below).
 #
-# The four images below are built from source (not on a public registry) and
-# must be pre-loaded into the local (kind/minikube) cluster. Their provenance:
+# The five images below are built from source (not on a public registry) and
+# must be pre-loaded into the local (kind/minikube) cluster. Build steps:
+# docs/user/common/guides/data-exchange-identity-hub.md#build-the-in-flight-images-from-source.
+# Their provenance:
 #   docker-identityhub-memory:latest   — tractusx-identityhub PR #309 (EDC 0.17.0 upgrade)
 #                                         https://github.com/eclipse-tractusx/tractusx-identityhub/pull/309
 #   docker-identityhub:latest          — same PR #309, postgres IdentityHub variant
@@ -45,6 +51,15 @@
 #     -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
 #     --namespace umbrella --create-namespace --timeout 20m
 ###############################################################
+
+# --- Version-mismatch guard sentinel ---
+# Asserts (to templates/_wallet-validate.tpl) that this overlay — the only
+# stack that can complete the DCP transfer — is layered. Without it any
+# wallet.mode=identityHub render fails fast rather than silently running the
+# non-working released 0.16.0 images. Removed with the overlay post-release.
+wallet:
+  identityHub:
+    imagesOverridden: true
 
 # --- IdentityHub + IssuerService: user's local 0.17.0 builds ---
 identity-and-trust-bundle:

@@ -35,6 +35,14 @@
 # resolution reuses the exact, proven code path of the shared profile —
 # the only difference is the per-participant host.
 #
+# This profile is deliberately SELF-CONTAINED (installable with a single `-f`):
+# its connector/BDRS blocks are NOT factored into a shared base. Unlike the
+# shared/postgres profiles (which share one host), every connector here points
+# at a different per-participant host (ih-<role>.tx.test) with a distinct DID,
+# contextId and credential-service URL — values that plain (non-templated) Helm
+# values files cannot derive — so there is little genuinely-common config to
+# extract, and keeping the profile independently installable is worth more.
+#
 # Wiring (implemented in this repo):
 #   * charts/umbrella/Chart.yaml declares three aliased
 #     `tractusx-identityhub-memory` deps (identity-hub-provider /

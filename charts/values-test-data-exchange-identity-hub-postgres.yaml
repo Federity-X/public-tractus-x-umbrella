@@ -19,19 +19,38 @@
 #
 # Data-exchange profile using the PERSISTENT (postgres) Identity Hub variant.
 #
-# Identical to values-test-data-exchange-identity-hub.yaml (shared topology,
-# single multi-tenant Identity Hub on identity-hub.tx.test) EXCEPT the Holder
-# Wallet is the postgres-backed `tractusx-identityhub` chart (aliased
-# `identity-hub-postgres`) instead of the in-memory `tractusx-identityhub-memory`
-# (`identity-hub`). ParticipantContexts, keys and issued credentials are stored
-# in a bundled PostgreSQL + Vault, so they survive an IdentityHub pod restart
-# (the in-memory variant loses them and must be re-seeded).
+# Same shared topology as values-test-data-exchange-identity-hub.yaml (one
+# multi-tenant Identity Hub on identity-hub.tx.test) EXCEPT the Holder Wallet is
+# the postgres-backed `tractusx-identityhub` chart (aliased `identity-hub-postgres`)
+# instead of the in-memory `tractusx-identityhub-memory` (`identity-hub`).
+#
+# PERSISTENCE — what actually survives a restart (stated precisely; do NOT claim
+# unqualified "persistent"):
+#   * ParticipantContexts + issued credentials live in the bundled PostgreSQL
+#     (PVC-backed; `nameOverride: identityhub-postgresql`). They SURVIVE both an
+#     IdentityHub pod restart and a postgres pod restart. (Verified empirically:
+#     state intact across 7 IdentityHub pod restarts.)
+#   * Signing keys are NOT in a bundled IH Vault — this profile sets
+#     `install.vault: false`, so the IH is wired to the umbrella's shared
+#     `umbrella-vault` (edc.vault.hashicorp.url=http://umbrella-vault:8200).
+#     Keys therefore survive an IdentityHub pod restart (the Vault is a separate
+#     pod), BUT the umbrella ships `umbrella-vault` in DEV mode (in-memory
+#     storage), so an `umbrella-vault` restart WIPES the keys and DCP signing
+#     breaks until the keypairs are re-provisioned. For true end-to-end key
+#     durability, back `umbrella-vault` with persistent storage (a separate,
+#     umbrella-wide hardening step). Net: SQL state is durable here; key
+#     durability is bounded by the shared dev-mode Vault.
 #
 # Mutually exclusive with the stub and the in-memory IH (enforced by
 # templates/_wallet-validate.tpl). The IH keeps the SAME ingress host
-# (identity-hub.tx.test) and API surface, so the connectors, Issuer Service,
-# seeding hook and BDRS wiring are unchanged from the in-memory profile — only
-# the dependency (and the seed's internal service name) differ.
+# (identity-hub.tx.test) and API surface, so the connector + Issuer Service +
+# seeding-hook + BDRS blocks below are INTENTIONALLY identical to the in-memory
+# profile and duplicated verbatim — NOT factored into a shared base. Plain Helm
+# values files cannot be templated or include one another, and keeping every
+# profile independently installable with a single `-f` is worth more here than
+# removing the duplication. Only the IH dependency, its port layout, the seed's
+# internal service name + pod label, and disabling the redundant per-consumer
+# seed Jobs differ from the in-memory profile.
 #
 # Usage:
 #   bash hack/helm-dependencies.bash          # pulls tractusx-identityhub + repackages
@@ -71,12 +90,15 @@ identity-and-trust-bundle:
     enabled: false
   identity-hub-postgres:
     enabled: true
-    # Bundled postgres backs the SQL stores (ParticipantContexts, keypairs,
+    # Bundled postgres backs the SQL stores (ParticipantContexts + issued
     # credentials) so they survive a pod restart — the key difference from the
-    # in-memory variant. Vault is left OFF (in-memory key vault, as in the
-    # `-memory` profile): the bundled `vault` subchart would render as
-    # `umbrella-vault` and collide with the umbrella's shared Vault. Enabling a
-    # persistent IH key vault is a separate hardening step.
+    # in-memory variant. Vault is left OFF so the IH uses the umbrella's shared
+    # `umbrella-vault` (edc.vault.hashicorp.url=http://umbrella-vault:8200): the
+    # bundled `vault` subchart would otherwise render as `umbrella-vault` and
+    # collide with it. NOTE the shared Vault runs in DEV mode (in-memory), so
+    # signing keys survive an IH pod restart but NOT an umbrella-vault restart —
+    # see the PERSISTENCE note in the header. Backing umbrella-vault with
+    # persistent storage is a separate, umbrella-wide hardening step.
     install:
       postgresql: true
       vault: false
