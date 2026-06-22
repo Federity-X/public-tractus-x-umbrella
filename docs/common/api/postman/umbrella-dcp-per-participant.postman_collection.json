@@ -455,6 +455,58 @@
           }
         },
         {
+          "name": "9b - Diagnose Transfer State (run if EDR stays empty)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let r = []; try { r = pm.response.json(); } catch (e) {}",
+                  "if (!Array.isArray(r)) r = [r];",
+                  "if (!r.length) {",
+                  "  pm.test('a transfer process exists', function () {",
+                  "    pm.expect.fail('no transfer process yet - the negotiation may not have triggered a transfer; re-send \"9 - Query Cached EDR\"');",
+                  "  });",
+                  "} else {",
+                  "  const tp = r[0];",
+                  "  const state = tp.state || tp['edc:state'];",
+                  "  let err = tp.errorDetail || tp['edc:errorDetail'];",
+                  "  if (Array.isArray(err)) err = err.map(function (e) { return e['@value'] || e; }).join('; ');",
+                  "  console.log('latest transfer state =', state, '| errorDetail =', err || '(none)');",
+                  "  pm.test('transfer is not TERMINATED', function () {",
+                  "    pm.expect(state, 'transfer ' + state + (err ? ': ' + err : '') + ' || If \"No BPN entry found\": the BDRS directory is missing the BPN->DID mapping (cold or empty in-memory BDRS). Re-seed BDRS (re-run the post-install-bdrs-setup hook, e.g. `helm upgrade` - see the deploy guide \"Re-seeding after a pod restart\"), then re-run from step 7.').to.not.equal('TERMINATED');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Api-Key",
+                "value": "{{consumer_api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"@context\": {\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"},\n  \"@type\": \"QuerySpec\", \"sortField\": \"stateTimestamp\", \"sortOrder\": \"DESC\", \"limit\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{consumer_mgmt}}/transferprocesses/request"
+          }
+        },
+        {
           "name": "10 - Get EDR Data Address",
           "event": [
             {

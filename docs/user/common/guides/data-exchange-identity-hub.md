@@ -40,8 +40,9 @@ postgres variant — its bundled `database` attestation is required by the DCP
 issuance walkthrough). When an identityHub profile is selected, umbrella:
 
 1. renders a `<release>-wallet-mode` ConfigMap with the participant set
-   (`operator`, `provider`, `consumer1`, `consumer2`), their derived DIDs,
-   IdentityHub credential-service URLs, and the issuer DID;
+   (`operator`, `provider`, `consumer1`, `consumer2` for the shared and postgres
+   profiles; the per-participant profile trims this to `provider` + `consumer1`),
+   their derived DIDs, IdentityHub credential-service URLs, and the issuer DID;
 2. runs a post-install seeding Job that executes the
    [DCP API walkthrough](https://github.com/eclipse-tractusx/tractusx-identityhub/tree/main/docs/usage/dcp-api-walkthrough)
    against IH / IS — creating every ParticipantContext and issuing each holder a
@@ -230,6 +231,10 @@ consumer data plane — run the smoke test:
 INGRESS_IP=127.0.0.1 ./hack/dcp-data-transfer-smoke.sh
 ```
 
+> **Prefer a GUI / step-by-step requests?** The same flow is available as a
+> single, self-contained Postman collection (with dynamic variable threading and
+> self-polling) — see [docs/common/api/postman/](../../../common/api/postman/).
+
 > **First transfer after a fresh install may need a retry.** The connector
 > resolves the provider BPN→DID through BDRS **asynchronously**, and the very
 > first negotiation can finish before that lookup populates the `BdrsClient`
@@ -341,6 +346,7 @@ is the entry point):
 **Tooling and templates:**
 
 - [DCP data-transfer smoke test](../../../../hack/dcp-data-transfer-smoke.sh) — `hack/dcp-data-transfer-smoke.sh`
+- [Postman collection](../../../common/api/postman/) — the same DCP flow as a runnable, self-contained Postman collection (see its [README](../../../common/api/postman/README.md))
 - [IdentityHub seeding Job](../../../../charts/tx-data-provider/templates/post-install-identityhub-seed.yaml) — the DCP provisioning hook
 - [BDRS directory-seeding hook](../../../../charts/umbrella/templates/post-install-bdrs-setup.yaml)
 - Wallet helpers: [`_wallet-derive.tpl`](../../../../charts/umbrella/templates/_wallet-derive.tpl) (per-participant DIDs/URLs) · [`_wallet-validate.tpl`](../../../../charts/umbrella/templates/_wallet-validate.tpl) (wallet mutual-exclusion + image-overlay guard) · [`configmap-wallet-mode.yaml`](../../../../charts/umbrella/templates/configmap-wallet-mode.yaml) (derived wallet ConfigMap)

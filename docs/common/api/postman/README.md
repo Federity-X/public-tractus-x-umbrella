@@ -73,6 +73,28 @@ assertion passing and `FULL DCP DATA TRANSFER SUCCEEDED` in the console.
 > (`ingress_ip=127.0.0.1`): all requests and assertions pass, ending in
 > `FULL DCP DATA TRANSFER SUCCEEDED`.
 
+## Troubleshooting
+
+**Step 9 returns an empty array even though the negotiation is FINALIZED.** The
+negotiation succeeded, but the transfer that runs after it hasn't produced an EDR
+yet. Two causes:
+
+- *Timing* — the transfer caches the EDR a few seconds after FINALIZED. Re-send
+  step 9. (The Collection Runner / newman poll automatically; a manual **Send**
+  does not — see the note below.)
+- *Transfer terminated* — run **9b - Diagnose Transfer State**. If it reports
+  `TERMINATED: No BPN entry found for agreement`, the in-memory BDRS directory is
+  missing the BPN→DID mapping (it is only seeded on install/upgrade and is lost if
+  the BDRS pod restarts). Re-seed BDRS by re-running the `post-install-bdrs-setup`
+  hook (e.g. `helm upgrade …`) — see the deploy guide's
+  [Re-seeding after a pod restart](../../../user/common/guides/data-exchange-identity-hub.md#re-seeding-after-a-pod-restart)
+  runbook — then re-run from step 7.
+
+> **Manual Send vs Collection Runner.** The self-polling and auto-re-negotiate in
+> steps 8/9/10 use `setNextRequest`, which only takes effect in the **Collection
+> Runner** and **newman** — not when you click **Send** on a single request. When
+> sending manually, re-send the poll requests yourself (and step 7 to re-negotiate).
+
 ## Use it for the shared or postgres profile
 
 The connector endpoints are the same across profiles; only the provider's DID host

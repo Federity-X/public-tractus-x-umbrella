@@ -674,7 +674,7 @@ The upstream `eclipse-edc/IdentityHub` architecture document defines **two offic
 1. **Embedded**: Identity Hub runs inside the EDC control-plane runtime (same JVM process)
 2. **Standalone**: Identity Hub runs as a separate single or clustered runtime
 
-> **Status (2026-06):** The SSI DIM Wallet Stub remains the **default**, but the dual-wallet IdentityHub option below is now **shipped and validated end-to-end** (full DCP catalog → negotiation → transfer → fetch). Three profiles exist: `values-test-data-exchange-identity-hub.yaml` (shared, multi-tenant IH — sub-option A below), `…-per-participant.yaml` (one IH per BPN — sub-option B/C below), and `…-postgres.yaml` (persistent, postgres-backed IH). The A / B / C diagrams below illustrate these topologies. See `docs/user/common/guides/data-exchange-identity-hub.md` and the #1609 plan for the validated stack + caveats.
+> **Status (2026-06):** The SSI DIM Wallet Stub remains the **default**, but the dual-wallet IdentityHub option below is now **shipped and validated end-to-end** (full DCP catalog → negotiation → transfer → fetch). Three profiles exist: `values-test-data-exchange-identity-hub.yaml` (shared, multi-tenant IH — sub-option A below), `…-per-participant.yaml` (one IH per participant — shipped as provider + consumer1; sub-option B/C below), and `…-postgres.yaml` (persistent, postgres-backed IH). The A / B / C diagrams below illustrate these topologies. See `docs/user/common/guides/data-exchange-identity-hub.md` and the #1609 plan for the validated stack + caveats.
 
 ```
 CURRENT (1 stub serves all):
