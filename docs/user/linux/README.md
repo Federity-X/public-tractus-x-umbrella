@@ -285,6 +285,7 @@ After successfully deploying the Umbrella Chart, you can explore the following g
   - [Observability](../common/guides/observability/observability.md) - Monitoring and logging.
   - [Hausanschluss Bundles](../common/guides/hausanschluss-bundles.md) - Information about Hausanschluss bundles.
   - [External Secrets](../common/guides/external-secrets.md) - Managing external secrets.
+  - [Staging / Production Deployment (HTTPS)](../common/guides/staging-production-deployment.md) - Deploy to a real cluster over HTTPS with cert-manager TLS, persistence, and real secrets.
 
 - **Secrets Management**:
   - [Secrets Overview](../common/secrets/README.md) - Comprehensive guide on secrets management.

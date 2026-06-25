@@ -351,6 +351,10 @@ is the entry point):
 - [BDRS directory-seeding hook](../../../../charts/umbrella/templates/post-install-bdrs-setup.yaml)
 - Wallet helpers: [`_wallet-derive.tpl`](../../../../charts/umbrella/templates/_wallet-derive.tpl) (per-participant DIDs/URLs) · [`_wallet-validate.tpl`](../../../../charts/umbrella/templates/_wallet-validate.tpl) (wallet mutual-exclusion + image-overlay guard) · [`configmap-wallet-mode.yaml`](../../../../charts/umbrella/templates/configmap-wallet-mode.yaml) (derived wallet ConfigMap)
 
+**Deployment:**
+
+- [Staging / Production Deployment (HTTPS)](./staging-production-deployment.md) — taking `wallet.mode=identityHub` to a real cluster over HTTPS (cert-manager TLS, persistence, real secrets, hardening checklist)
+
 **Background / concepts:**
 
 - [ECOSYSTEM-GUIDE.md](../../../../ECOSYSTEM-GUIDE.md) — DCP / `wallet.mode` concepts and the stub-vs-IdentityHub trust model

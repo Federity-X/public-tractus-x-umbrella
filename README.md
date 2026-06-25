@@ -31,6 +31,8 @@ The Umbrella Chart is intended for:
 2. **Sandbox Environments**: Create local environments to evaluate and experiment with Catena-X components.
 3. **Development**: Provide a unified setup for contributors and developers working on Tractus-X projects.
 
+> Deploying beyond a local sandbox to a real cluster over HTTPS is a deliberate hardening exercise — see the [Staging / Production Deployment (HTTPS)](./docs/user/common/guides/staging-production-deployment.md) guide.
+
 ## Cluster Setup
 
 - Ensure your cluster meets the updated system requirements:

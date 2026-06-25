@@ -86,6 +86,8 @@ For detailed instructions, see the [Deployment Guide](deployment.md).
 - Enable Vault audit logging
 - Use namespace isolation for multi-tenant deployments
 
+For a complete production deployment that wires External Secrets Operator and Vault together with HTTPS, cert-manager TLS, and persistence, see the [Staging / Production Deployment (HTTPS)](../guides/staging-production-deployment.md) guide.
+
 ## Support
 
 For issues and questions:

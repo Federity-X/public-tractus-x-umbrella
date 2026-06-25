@@ -71,6 +71,7 @@ The currently available auxiliary components are following:
 - Ensure your Kubernetes cluster meets the minimum system requirements.
 - Some pods may take time to initialize as they wait for dependencies to become ready.
 - Persistence is disabled by default but can be enabled through custom values.
+- For deploying to a real (non-local) cluster over HTTPS — with persistence, real secrets, and cert-manager TLS — see the [Staging / Production Deployment (HTTPS)](../../common/guides/staging-production-deployment.md) guide.
 
 ## NOTICE
 

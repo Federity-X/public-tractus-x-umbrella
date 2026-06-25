@@ -22,6 +22,7 @@ The following table links you to the respective documentations.
     - [Observability](user/common/guides/observability/observability.md)
     - [Hausanschluss Bundles](user/common/guides/hausanschluss-bundles.md)
     - [External Secrets Operator](user/common/guides/external-secrets.md)
+    - [Staging / Production Deployment (HTTPS)](user/common/guides/staging-production-deployment.md)
   - [Secrets Management](user/common/secrets)
     - [Overview](user/common/secrets/README.md)
     - [Deployment Guide](user/common/secrets/deployment.md)

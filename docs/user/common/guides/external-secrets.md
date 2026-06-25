@@ -184,6 +184,8 @@ The output should include the message "Secret value: test-password" if everythin
 
 For more advanced configuration options, refer to the [External Secrets Operator documentation](https://external-secrets.io/latest/).
 
+For a full production deployment that combines External Secrets Operator and Vault with HTTPS, cert-manager TLS, and persistence, see the [Staging / Production Deployment (HTTPS)](./staging-production-deployment.md) guide.
+
 ## NOTICE
 
 This work is licensed under the [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/legalcode).
