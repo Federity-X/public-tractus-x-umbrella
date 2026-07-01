@@ -47,6 +47,16 @@
 #   * CentralIDP block — NOT yet validated on a full deploy (Keycloak is heavy;
 #     intended for the 36 GB machine). Notes/caveats inline. Bring it up and adjust
 #     resources / realm seeding there before relying on OIDC login.
+#
+# RESOURCE FOOTPRINT (memory)
+#   Measured baseline (per-participant profile WITHOUT this overlay, 21 pods on an
+#   8 GiB/8 CPU kind node): ~3.35 GiB actual working set / ~4.31 GiB requests.
+#   This overlay adds CentralIDP: Keycloak (req 768Mi / limit 1536Mi) + its Postgres
+#   (~256Mi) + a TRANSIENT realm-seeding Job (~850Mi while it runs). So the plus
+#   stack is ~4.3-4.6 GiB steady (~5-6 GiB peak during Keycloak realm import),
+#   ~5.3-6.1 GiB reserved. 8 GiB is TIGHT; 12-16 GiB is comfortable; 36 GiB ample.
+#   Trim with `--set pgadmin4.enabled=false` (~186Mi, dev-only). Full sizing table:
+#   fx-connector-ui docs/HANDOFF-BE-241.md "Memory & resource sizing".
 ###############################################################
 
 # -----------------------------------------------------------------------------
