@@ -9,6 +9,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Local repos — ASK for each path; do NOT assume.** This effort spans several **local
+> clones** built/modified from source (EDC connector `public-tractusx-edc`, IdentityHub +
+> IssuerService `public-tractusx-identityhub`, the `fx-connector-ui` panel, the Portal
+> backend for Phase C, and this umbrella). Their filesystem paths differ per machine. At
+> the start of a session, **ask the user for the local path of each repo you need before
+> running builds** — never assume `~/projects/...`. Full list, remotes, branches, and
+> purpose: [fx-connector-ui `docs/HANDOFF-BE-241.md`](https://github.com/Federity-X/fx-connector-ui/blob/feature/BE-241-test-all-features/docs/HANDOFF-BE-241.md).
+
 ## What this repository is
 
 Eclipse Tractus-X Umbrella: a **Helm umbrella chart** (plus a small set of supporting
