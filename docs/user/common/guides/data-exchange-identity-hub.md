@@ -315,6 +315,40 @@ kubectl -n umbrella logs job/umbrella-post-install-bdrs-setup | tail -5
 The **postgres** profile avoids step 1 entirely — its ParticipantContexts and
 credentials persist across IdentityHub pod restarts (see *Known limitations* L3).
 
+## Admin panel (per-participant-plus overlay)
+
+The [`fx-connector-ui`](https://github.com/Federity-X/fx-connector-ui) admin panel drives
+this per-participant deployment (manage assets/policies/contract-definitions, browse and
+consume catalogs over DCP, inspect wallets and credentials, and administer the issuer).
+
+To expose everything the panel needs, layer the **plus** overlay as a third `-f`:
+
+```bash
+helm install umbrella charts/umbrella \
+  -f charts/values-test-data-exchange-identity-hub-per-participant.yaml \
+  -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
+  -f charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml \
+  --namespace umbrella --create-namespace --timeout 25m
+```
+
+The overlay ([`…-per-participant-plus.yaml`](../../../../charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml),
+see its header for full notes) adds:
+
+- **consumer1 IdentityHub admin ingress** (`ih-consumer1-admin.tx.test`) so the panel's
+  Wallet page works for consumer1, not just the provider. No new pod. *Validated.*
+- **CentralIDP** (Keycloak) for the panel's optional OIDC login. The panel's OIDC client
+  `fx-connector-ui` + `participant`/`role` claim mappers + test users live in this repo's
+  realm import (`init-container/iam/centralidp/CX-Central-realm.json`), which is baked into
+  the `umbrella-init-container` image — **rebuild that image locally** (into your cluster
+  registry) after editing the realm, then point `centralidp.realmSeeding.initContainer.image`
+  at it. *This CentralIDP block is not yet validated on a full deploy* — bring it up on a
+  larger node (≈36 GB) and tune resources / realm seeding there. The issuer admin API
+  (`issuer-service-admin.tx.test/api/admin`) is already exposed by the defaults.
+
+The panel repo's [docs/HANDOFF-BE-241.md](https://github.com/Federity-X/fx-connector-ui/blob/main/docs/HANDOFF-BE-241.md)
+is the end-to-end runbook (deploy → per-install key extraction → run → verify → the
+deferred live-OIDC step).
+
 ## Known limitations
 
 | ID  | Limitation                                                                                          | Workaround / status                                                                                          |
@@ -342,6 +376,7 @@ is the entry point):
 - [Per-participant (provider + consumer1)](../../../../charts/values-test-data-exchange-identity-hub-per-participant.yaml) — `…-per-participant.yaml`
 - [Persistent / PostgreSQL IdentityHub](../../../../charts/values-test-data-exchange-identity-hub-postgres.yaml) — `…-postgres.yaml`
 - [Local-image overlay (EDC-0.17.0 stack)](../../../../charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml) — `…-local-0.17.0.yaml`
+- [Per-participant-plus overlay (admin panel: consumer1 admin ingress + CentralIDP)](../../../../charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml) — `…-per-participant-plus.yaml`
 
 **Tooling and templates:**
 

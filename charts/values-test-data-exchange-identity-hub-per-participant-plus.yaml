@@ -1,0 +1,115 @@
+###############################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+###############################################################
+#
+# PER-PARTICIPANT "plus" overlay — layered ON TOP OF the base per-participant
+# profile (+ the 0.17.0 image overlay). It exposes everything the fx-connector-ui
+# admin panel needs so NO panel feature is left untested:
+#
+#   * consumer1 IdentityHub ADMIN ingress (ih-consumer1-admin.tx.test) — makes the
+#     panel's Wallet page work for consumer1, not just the provider. Symmetric with
+#     the provider admin ingress in the base profile. NO new pod (same IH JVM).
+#   * CentralIDP (Keycloak) — an OIDC/OpenID-Connect IdP for the panel's optional
+#     Keycloak login provider. Orthogonal to `wallet.mode` (does not trip the
+#     stub/identityHub wallet validator). Heap-capped to fit alongside the two
+#     IdentityHub JVMs + connectors on a single node (~36 GB target).
+#
+# The IssuerService ADMIN API (issuer-service-admin.tx.test, endpoints
+# [issueradmin, identity]) is ALREADY exposed by the identity-and-trust-bundle
+# defaults — no change needed here; the panel's Issuer area uses it directly.
+#
+# Usage (three -f files, plus this one last):
+#   bash hack/helm-dependencies.bash
+#   helm install umbrella charts/umbrella \
+#     -f charts/values-test-data-exchange-identity-hub-per-participant.yaml \
+#     -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
+#     -f charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml \
+#     --namespace umbrella --create-namespace --timeout 25m
+#
+# VALIDATION STATUS
+#   * consumer1 admin ingress — VALIDATED (identical shape to the provider admin
+#     ingress; verified reachable: GET /api/identity/v1alpha/participants -> 200).
+#   * CentralIDP block — NOT yet validated on a full deploy (Keycloak is heavy;
+#     intended for the 36 GB machine). Notes/caveats inline. Bring it up and adjust
+#     resources / realm seeding there before relying on OIDC login.
+###############################################################
+
+# -----------------------------------------------------------------------------
+# consumer1 IdentityHub — ADD an admin ingress alongside its existing public one.
+#
+# Helm REPLACES lists (it does not merge them), so this re-declares the FULL
+# `ingresses` list: the base profile's public ingress (credentials/did/sts) PLUS
+# the new admin ingress (identity/accounts). All other identity-hub-consumer1
+# keys (resources, probes, env, didweb) are map-merged from the base profile.
+# -----------------------------------------------------------------------------
+identity-hub-consumer1:
+  identityhub:
+    ingresses:
+      - enabled: true
+        hostname: "ih-consumer1.tx.test"
+        endpoints: [credentials, did, sts]
+        className: "nginx"
+        tls:
+          enabled: false
+      - enabled: true
+        hostname: "ih-consumer1-admin.tx.test"
+        endpoints: [identity, accounts]
+        className: "nginx"
+        tls:
+          enabled: false
+
+# -----------------------------------------------------------------------------
+# CentralIDP (Keycloak) — OIDC IdP for the panel's optional Keycloak login.
+#
+# Orthogonal to the wallet abstraction: enabling Keycloak does NOT enable a wallet
+# implementation, so `_wallet-validate.tpl` (stub XOR identityHub) stays satisfied.
+#
+# The panel's OIDC client `fx-connector-ui` + its `participant`/`role` claim mappers
+# and test users are added to this repo's realm import
+# (init-container/iam/centralidp/CX-Central-realm.json). That JSON is baked into the
+# `umbrella-init-container` image referenced by centralidp.realmSeeding.initContainer
+# — so REBUILD that image locally (into your kind registry) after editing the realm,
+# otherwise the published tag won't contain the panel client.
+#
+# CAVEATS to validate on first bring-up (36 GB):
+#   * realmSeeding links CX-Central -> CX-Operator on sharedidp; sharedidp is NOT
+#     deployed in this profile. The CX-Central realm + clients still import, but if
+#     the seeding job errors on the missing IdP link, either also enable `sharedidp`
+#     or tune realmSeeding. OIDC login to the panel only needs CX-Central + the
+#     fx-connector-ui client.
+#   * Tune the Keycloak resources below to the node's actual headroom.
+# -----------------------------------------------------------------------------
+centralidp:
+  enabled: true
+  keycloak:
+    # Cap the footprint so Keycloak co-exists with 2 IdentityHub JVMs + connectors.
+    # The memory LIMIT is what bounds the container; the JVM is container-memory-aware
+    # (UseContainerSupport) and auto-sizes its heap within the limit, so DO NOT set
+    # JAVA_OPTS_APPEND here — the chart already uses it for Keycloak's jgroups DNS
+    # discovery (`-Djgroups.dns.query=...`) and an explicit env var would clobber it.
+    # If realm import is heap-starved on first boot, raise the memory limit instead.
+    resources:
+      requests:
+        cpu: 250m
+        memory: 768Mi
+      limits:
+        cpu: "1"
+        memory: 1536Mi
+  realmSeeding:
+    # Local sandbox: do not force TLS on the Keycloak endpoints.
+    sslRequired: "none"

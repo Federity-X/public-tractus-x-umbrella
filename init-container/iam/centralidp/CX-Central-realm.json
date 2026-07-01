@@ -2850,6 +2850,87 @@
   "webAuthnPolicyPasswordlessExtraOrigins": [],
   "users": [
     {
+      "username": "provider-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "provider-admin@tx.test",
+      "firstName": "Provider",
+      "lastName": "Admin",
+      "attributes": {
+        "participant": [
+          "provider"
+        ],
+        "role": [
+          "admin"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "provider-admin",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-cx-central"
+      ],
+      "groups": []
+    },
+    {
+      "username": "provider-viewer",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "provider-viewer@tx.test",
+      "firstName": "Provider",
+      "lastName": "Viewer",
+      "attributes": {
+        "participant": [
+          "provider"
+        ],
+        "role": [
+          "viewer"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "provider-viewer",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-cx-central"
+      ],
+      "groups": []
+    },
+    {
+      "username": "consumer1-admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "consumer1-admin@tx.test",
+      "firstName": "Consumer1",
+      "lastName": "Admin",
+      "attributes": {
+        "participant": [
+          "consumer1"
+        ],
+        "role": [
+          "admin"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "consumer1-admin",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-cx-central"
+      ],
+      "groups": []
+    },
+    {
       "id": "e69c1397-eee8-434a-b83b-dc7944bb9bdd",
       "username": "service-account-sa-cl1-reg-2",
       "emailVerified": false,
@@ -4002,6 +4083,75 @@
     ]
   },
   "clients": [
+    {
+      "clientId": "fx-connector-ui",
+      "name": "FX Connector UI (EDC Admin Panel)",
+      "description": "OIDC client for the fx-connector-ui EDC admin panel (Auth.js Keycloak provider, server-side code exchange).",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "fx-connector-ui-dev-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "rootUrl": "http://localhost:3000",
+      "baseUrl": "http://localhost:3000",
+      "redirectUris": [
+        "http://localhost:3000/api/auth/callback/keycloak",
+        "http://localhost:3100/api/auth/callback/keycloak"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "http://localhost:3100"
+      ],
+      "fullScopeAllowed": false,
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:3100/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "profile",
+        "roles",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access"
+      ],
+      "protocolMappers": [
+        {
+          "name": "participant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "participant",
+            "claim.name": "participant",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "role",
+            "claim.name": "role",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
     {
       "id": "6b693f36-abdd-4687-8052-bf2d66b225f8",
       "clientId": "account",
