@@ -4108,7 +4108,8 @@
       ],
       "fullScopeAllowed": false,
       "attributes": {
-        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:3100/*"
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:3100/*",
+        "login_theme": "keycloak"
       },
       "defaultClientScopes": [
         "web-origins",
