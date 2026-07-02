@@ -62,3 +62,23 @@ centralidp:
         persistence:
           enabled: true
           size: 2Gi
+
+# BUGFIX: enabling persistence adds a PVC-attach delay that lengthens the
+# issuer-service startup. Its default liveness probe (initialDelay 90s + 6×15s ≈
+# 180s) is too tight for that on a contended node — the kubelet SIGTERM-killed it
+# ~7× (exitCode 143), and it was flapping Ready↔NotReady during the IdentityHub
+# seed's credential-request loop, so only 1 of 4 credentials got issued. The
+# issuerservice chart has no startupProbe, so widen the liveness/readiness budget
+# (~120 + 40×15 ≈ 720s) so it isn't killed mid-startup and stays Ready while the
+# seed runs. (Applies whenever persistence is on; harmless when it isn't.)
+identity-and-trust-bundle:
+  issuer-service:
+    issuerservice:
+      livenessProbe:
+        initialDelaySeconds: 120
+        periodSeconds: 15
+        failureThreshold: 40
+      readinessProbe:
+        initialDelaySeconds: 120
+        periodSeconds: 15
+        failureThreshold: 40
