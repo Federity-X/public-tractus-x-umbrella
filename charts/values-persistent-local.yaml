@@ -1,0 +1,64 @@
+###############################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+###############################################################
+#
+# PROD-ALIKE DURABILITY (part 7a) — Postgres persistence overlay.
+#
+# Layer as an extra `-f` on any identityHub profile to give the connector +
+# CentralIDP Postgres instances a PVC, so their DBs survive pod restarts /
+# evictions instead of being wiped (the default is `persistence: false`).
+# (IssuerService Postgres is already PVC-backed by the identity-and-trust-bundle.)
+#
+# MEASURED: persistence adds ~0 RAM (it swaps emptyDir → PVC; same process) — the
+# per-participant-plus stack was 6.41 GiB working set with this overlay, fitting a
+# 12 GiB Docker VM. VERIFIED: killing a connector Postgres pod recreates it against
+# the same PVC and its assets survive.
+#
+# ⚠ NOT SUFFICIENT ALONE for full Docker/VM-restart durability. The connector +
+# IdentityHub STS secrets (e.g. `edc-wallet-secret`) live in the bundle's Vault,
+# which runs `server -dev` (in-memory). A Vault restart wipes them and DCP breaks
+# (`Failed to fetch client secret from the vault with alias: edc-wallet-secret`,
+# then IH STS `401 invalid_client`) — proven live. Full durability additionally
+# needs Vault in prod/persistent mode + an init/unseal step (part 7b) — see
+# fx-connector-ui docs/HANDOFF-BE-241.md §7.
+###############################################################
+
+# Connector DBs (dataspace-connector-bundle) — provider + consumer1.
+tx-data-provider:
+  dataspace-connector-bundle:
+    postgresql:
+      primary:
+        persistence:
+          enabled: true
+          size: 5Gi
+dataconsumerOne:
+  dataspace-connector-bundle:
+    postgresql:
+      primary:
+        persistence:
+          enabled: true
+          size: 5Gi
+
+# CentralIDP (Keycloak) Postgres.
+centralidp:
+  keycloak:
+    postgresql:
+      primary:
+        persistence:
+          enabled: true
+          size: 2Gi
