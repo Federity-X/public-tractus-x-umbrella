@@ -25,17 +25,26 @@ and run a **full DCP data exchange** (catalog → contract negotiation → trans
 
 The umbrella chart exposes a single toggle — `wallet.mode` — that selects the
 wallet implementation for the entire data-exchange subset. Within
-`identityHub` mode there are three mutually-exclusive Holder-Wallet variants
+`identityHub` mode there are mutually-exclusive Holder-Wallet variants
 (enforced by `charts/umbrella/templates/_wallet-validate.tpl`):
 
-| Profile (`-f charts/…`)                                     | Wallet chart                                  | Topology / store                                  |
-| ----------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------- |
-| `values-test-data-exchange.yaml` (default)                  | `ssi-dim-wallet-stub`                         | stub, no DCP seeding                              |
-| `values-test-data-exchange-identity-hub.yaml`               | `tractusx-identityhub-memory` (`identity-hub`)| **shared** in-memory IH (one multi-tenant host)   |
-| `values-test-data-exchange-identity-hub-per-participant.yaml`| `tractusx-identityhub-memory` ×2              | **per-participant** — provider + consumer1, each on its own IH |
-| `values-test-data-exchange-identity-hub-postgres.yaml`      | `tractusx-identityhub` (`identity-hub-postgres`)| **persistent** IH backed by PostgreSQL          |
+| Profile (`-f charts/…`)                                                 | Wallet chart                                    | Topology / store                                              |
+| ----------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------- |
+| `values-test-data-exchange.yaml` (default)                              | `ssi-dim-wallet-stub`                           | stub, no DCP seeding                                          |
+| `values-test-data-exchange-identity-hub.yaml`                           | `tractusx-identityhub-memory` (`identity-hub`)  | **shared** in-memory IH (one multi-tenant host)              |
+| `values-test-data-exchange-identity-hub-per-participant.yaml`           | `tractusx-identityhub-memory` ×2                | **per-participant** — provider + consumer1, each on its own IH (in-memory) |
+| `values-test-data-exchange-identity-hub-postgres.yaml`                  | `tractusx-identityhub` (`identity-hub-postgres`)| **persistent shared** IH backed by PostgreSQL                |
+| `values-test-data-exchange-identity-hub-per-participant-postgres.yaml`  | `tractusx-identityhub` ×2                        | **persistent per-participant** — provider + consumer1, each on its own PostgreSQL-backed IH |
 
-All three identityHub profiles share one IssuerService (`tractusx-issuerservice`,
+The last profile is the per-participant topology on the **persistent** IH variant
+(Phase 1 of the prod-alike "no-in-memory" build): each IdentityHub's
+ParticipantContexts + issued credentials live in its own PVC-backed PostgreSQL and
+survive a pod restart (the `-memory` per-participant profile loses them on any
+restart and must be re-seeded). It reuses the same ingress hosts, DIDs and
+connector wiring as the in-memory per-participant profile — only the IH backing
+store + in-cluster service names change.
+
+All identityHub profiles share one IssuerService (`tractusx-issuerservice`,
 postgres variant — its bundled `database` attestation is required by the DCP
 issuance walkthrough). When an identityHub profile is selected, umbrella:
 
@@ -179,8 +188,10 @@ helm install umbrella charts/umbrella \
 ```
 
 Swap the first `-f` for `…-per-participant.yaml` (provider + consumer1, each on
-its **own** IdentityHub) or `…-postgres.yaml` (persistent IH) to deploy the other
-topologies. The `-local-0.17.0` overlay applies to all three.
+its **own** IdentityHub), `…-postgres.yaml` (persistent shared IH), or
+`…-per-participant-postgres.yaml` (persistent per-participant — each holder on its
+own PostgreSQL-backed IH) to deploy the other topologies. The `-local-0.17.0`
+overlay applies to all of them.
 
 ## Verifying the seed
 
@@ -312,8 +323,11 @@ helm upgrade umbrella charts/umbrella --namespace umbrella --reuse-values \
 kubectl -n umbrella logs job/umbrella-post-install-bdrs-setup | tail -5
 ```
 
-The **postgres** profile avoids step 1 entirely — its ParticipantContexts and
-credentials persist across IdentityHub pod restarts (see *Known limitations* L3).
+Both **postgres** profiles (`…-postgres.yaml` shared and
+`…-per-participant-postgres.yaml`) avoid step 1 entirely — their ParticipantContexts
+and credentials persist across IdentityHub pod restarts (see *Known limitations* L3).
+The in-memory BDRS still loses its directory on a BDRS restart until Phase 3
+(persistent BDRS) lands.
 
 ## Admin panel (per-participant-plus overlay)
 
@@ -341,6 +355,27 @@ helm install umbrella charts/umbrella \
 carries the panel's realm client + `login_theme`. Drop the `-f values-persistent-local.yaml`
 line for a lean/ephemeral run.)
 
+For the **prod-alike "no-in-memory" durable build**, swap the two in-memory IH `-f`
+files for their PostgreSQL counterparts — `…-per-participant-postgres.yaml` (base)
+and `…-per-participant-postgres-plus.yaml` (plus overlay) — keeping the same
+`-local-0.17.0` and `values-persistent-local.yaml` overlays:
+
+```bash
+helm install umbrella charts/umbrella \
+  -f charts/values-test-data-exchange-identity-hub-per-participant-postgres.yaml \
+  -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
+  -f charts/values-test-data-exchange-identity-hub-per-participant-postgres-plus.yaml \
+  -f charts/values-persistent-local.yaml \
+  --set centralidp.realmSeeding.initContainer.image.name=umbrella-init-container:be241 \
+  --set centralidp.realmSeeding.initContainer.image.pullPolicy=Never \
+  --namespace umbrella --create-namespace --timeout 25m
+```
+
+This gives each holder its **own** PVC-backed PostgreSQL IdentityHub (state survives
+IH/DB pod restarts). Signing keys still live in a dev-mode Vault, so a Vault restart
+still wipes them until Phase 2 (Vault → prod mode); BDRS is still in-memory until
+Phase 3. See the handoff §7 for the full durability roadmap.
+
 The overlay ([`…-per-participant-plus.yaml`](../../../../charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml),
 see its header for full notes) adds:
 
@@ -367,8 +402,8 @@ deferred live-OIDC step).
 |-----|-----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
 | L1  | The validated flow needs the EDC-0.17.0 stack, not yet on a public release channel.                 | Use the `-local-0.17.0` overlay with built-from-source images (see [Version requirement](#version-requirement)). |
 | L2  | First negotiation after a fresh install can lose a race against the connector's **async** BDRS lookup. | Transient; the smoke test auto-retries and subsequent transfers reuse the warmed BdrsClient cache. Upstream connector timing gap (async BPN resolution vs. terminal transfer state) — to be filed against [tractusx-edc](https://github.com/eclipse-tractusx/tractusx-edc/issues); no umbrella-side fix. |
-| L3  | Memory-lean defaults are **not restart-durable**: Postgres runs `persistence: false` and Vault runs `server -dev` (in-memory), so a pod / Docker / VM restart wipes DBs + secrets. | On a small node, [re-seed](#re-seeding-after-a-pod-restart) or clean-reinstall after a restart. On a **large node (≈36 GB) prefer a durable prod-alike build**: enable Postgres `persistence.enabled` per component **and** take Vault out of dev mode (`vault.server.dev.enabled: false` + `dataStorage.enabled` + an init/unseal step, since prod Vault starts sealed and the dev-token secret-seeding must be adapted). Full recipe: the fx-connector-ui handoff §7. |
-| L4  | Per-participant runs one IdentityHub JVM **per participant**, so it scales with participant count. The shipped profile is deliberately **2 participants** (provider + consumer1) to fit a single node — a 4-participant variant over-contends the node (the provider data-backend loses the startup CPU race against the IdentityHub JVMs and crashloops). | Keep per-participant at 2; for more participants, give the cluster proportionally more CPU/memory, or use the shared/postgres profile (single multi-tenant IdentityHub). |
+| L3  | Memory-lean defaults are **not restart-durable**: Postgres runs `persistence: false`, the IdentityHubs run the `-memory` chart, and Vault runs `server -dev` (in-memory), so a pod / Docker / VM restart wipes DBs + wallet state + secrets. | On a small node, [re-seed](#re-seeding-after-a-pod-restart) or clean-reinstall after a restart. On a **large node (≈36 GB) prefer a durable prod-alike build**: use a **postgres** IH profile (`…-postgres.yaml` or `…-per-participant-postgres.yaml`, Phase 1) so ParticipantContexts + credentials persist, enable Postgres `persistence.enabled` per component (`values-persistent-local.yaml`), **and** take Vault out of dev mode (Phase 2: `vault.server.dev.enabled: false` + `dataStorage.enabled` + an init/unseal step, since prod Vault starts sealed and the dev-token secret-seeding must be adapted). BDRS persistence is Phase 3. Full recipe: the fx-connector-ui handoff §7. |
+| L4  | Per-participant runs one IdentityHub JVM **per participant**, so it scales with participant count. The shipped profiles (in-memory and postgres) are deliberately **2 participants** (provider + consumer1) to fit a single node — a 4-participant variant over-contends the node (the provider data-backend loses the startup CPU race against the IdentityHub JVMs and crashloops). The postgres per-participant profile additionally runs one bundled PostgreSQL **per** IdentityHub (distinct `nameOverride`s), adding ~2 lightweight DB pods. | Keep per-participant at 2; for more participants, give the cluster proportionally more CPU/memory, or use the shared / persistent-shared profile (single multi-tenant IdentityHub). |
 
 ## Teardown
 

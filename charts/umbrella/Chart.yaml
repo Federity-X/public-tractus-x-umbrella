@@ -132,6 +132,21 @@ dependencies:
     version: v0.3.2
     repository: https://eclipse-tractusx.github.io/charts/dev
     condition: identity-hub-consumer2.enabled
+  # -- Per-participant IdentityHub — PERSISTENT / postgres variant for consumer1.
+  #    Same `tractusx-identityhub` (postgres) chart the bundle exposes as
+  #    `identity-hub-postgres`, aliased here so the per-participant topology can
+  #    give consumer1 its OWN durable Holder Wallet (ParticipantContexts + issued
+  #    credentials survive a pod restart). The provider reuses the bundle's
+  #    `identity-hub-postgres`, so only consumer1 needs a dedicated umbrella-level
+  #    alias. Enabled by
+  #    values-test-data-exchange-identity-hub-per-participant-postgres.yaml;
+  #    the in-memory `identity-hub-consumer1` above stays the default.
+  #    Source: https://github.com/eclipse-tractusx/tractusx-identityhub
+  - name: tractusx-identityhub
+    alias: identity-hub-consumer1-postgres
+    version: v0.3.2
+    repository: https://eclipse-tractusx.github.io/charts/dev
+    condition: identity-hub-consumer1-postgres.enabled
   # OTEL Collector
   - name: opentelemetry-collector
     alias: opentelemetry-collector

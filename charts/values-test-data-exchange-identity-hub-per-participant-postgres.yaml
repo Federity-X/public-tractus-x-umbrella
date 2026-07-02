@@ -1,0 +1,397 @@
+###############################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+###############################################################
+#
+# Data-exchange profile: PER-PARTICIPANT topology on the PERSISTENT (postgres)
+# Identity Hub variant. Same 2-participant topology as
+# values-test-data-exchange-identity-hub-per-participant.yaml (provider +
+# consumer1, EACH on its own IdentityHub behind its own ingress host) EXCEPT both
+# Holder Wallets are the postgres-backed `tractusx-identityhub` chart instead of
+# the in-memory `tractusx-identityhub-memory`. This is Phase 1 of the prod-alike
+# "no-in-memory" build.
+#
+#   * provider  → bundle `identity-hub-postgres`, hosted at ih-provider.tx.test
+#   * consumer1 → `identity-hub-consumer1-postgres` (umbrella-level dep alias),
+#                 hosted at ih-consumer1.tx.test
+#   * Issuer Service → issuer-service.tx.test (shared trust anchor; both trust it)
+#
+# PERSISTENCE — what actually survives a restart (stated precisely; do NOT claim
+# unqualified "persistent"):
+#   * Each IdentityHub's ParticipantContexts + issued credentials live in its OWN
+#     bundled PostgreSQL (PVC-backed). They SURVIVE both an IdentityHub pod
+#     restart and a postgres pod restart — the key win over the `-memory` variant,
+#     which loses them on any restart and must be fully re-seeded.
+#   * Signing keys are NOT in a bundled IH Vault — this profile sets
+#     `install.vault: false`, so each IH is wired to the connector/shared Vault.
+#     Keys therefore survive an IdentityHub pod restart, BUT those Vaults still run
+#     in DEV mode (in-memory storage), so a Vault restart WIPES the keys and DCP
+#     signing breaks until re-provisioned. Closing that gap is Phase 2 (Vault →
+#     prod mode). Net: SQL state is durable here; key durability is bounded by the
+#     dev-mode Vault until Phase 2.
+#
+# Two bundled PostgreSQL instances (one per IH) MUST have DISTINCT nameOverrides
+# (`ih-provider-postgresql`, `ih-consumer1-postgresql`): two bitnami `postgresql`
+# charts with the same name collide (both would be selected by a shared
+# `<release>-postgresql` Service and the IH randomly connects to the wrong DB →
+# "database ih does not exist"). Same label-clash fix the shared postgres profile
+# and the issuer-service use. The explicit `jdbcUrl` repoints each IH's datasource
+# ConfigMap at its correctly-named Service.
+#
+# The postgres IdentityHub chart exposes a DIFFERENT internal port layout than the
+# in-memory chart (identity=8082, credentials=8083, did=8084; sts stays 8087). The
+# seeding Job reaches each IH over the in-cluster service:port, so the port map is
+# overridden below via `wallet.identityHub.shared.ports` — the derive helpers
+# (_wallet-derive.tpl) read that map for BOTH topologies. Connectors reach the IH
+# through the ingress (endpoint→port mapping handled by the chart), so they need
+# no change and their blocks are identical to the in-memory per-participant profile.
+#
+# Mutually exclusive with the stub and the in-memory IH (enforced by
+# templates/_wallet-validate.tpl). Self-contained (installable with a single
+# topology `-f`); the connector/BDRS blocks are intentionally not factored into a
+# shared base — every connector points at a different per-participant host, which
+# plain values files cannot derive.
+#
+# Usage:
+#   bash hack/helm-dependencies.bash          # pulls tractusx-identityhub + repackages
+#   helm install umbrella charts/umbrella \
+#     -f charts/values-test-data-exchange-identity-hub-per-participant-postgres.yaml \
+#     -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
+#     --namespace umbrella --create-namespace --timeout 25m
+#   # smoke test (provider on its own IH host):
+#   INGRESS_IP=127.0.0.1 PROVIDER_DID=did:web:ih-provider.tx.test:BPNL00000003AYRE \
+#     ./hack/dcp-data-transfer-smoke.sh
+###############################################################
+
+wallet:
+  mode: identityHub
+  operatorBpn: "BPNL00000003CRHK"
+  # Slim the dataspace to the two transfer parties (see the in-memory profile).
+  participants:
+    operator: null
+    consumer2: null
+  identityHub:
+    topology: perParticipant
+    shared:
+      # Bootstrap IH the seeding Job first waits for + scrapes the super-user key
+      # from (before the per-participant loop): the provider's postgres IH. The
+      # matching pod label is set on tx-data-provider.wallet.identityHubSeed below.
+      internalIdentityHubService: "identity-hub-postgres"
+      # Postgres IdentityHub internal port layout (differs from `-memory`). The
+      # derive helpers read this map for the per-participant internal API URLs too;
+      # both IHs are the same postgres chart, so one map serves both. (The
+      # unlisted issuer-service ports isIssuerAdmin/isIdentity/isIssuance keep
+      # their umbrella defaults via Helm's key-wise map merge.)
+      ports:
+        ihIdentity: 8082
+        ihCredentials: 8083
+        ihDid: 8084
+        ihSts: 8087
+    perParticipant:
+      # Participant slug -> ingress host of THAT participant's own Identity Hub.
+      hosts:
+        provider:  "ih-provider.tx.test"
+        consumer1: "ih-consumer1.tx.test"
+      # Participant slug -> in-cluster IdentityHub name (the Helm dep alias).
+      # provider reuses the bundle postgres IH (alias `identity-hub-postgres`);
+      # consumer1 gets a dedicated postgres one. Drives the Service DNS
+      # (<release>-<base>) + pod-label selector the seeding Job uses.
+      serviceBase:
+        provider:  "identity-hub-postgres"
+        consumer1: "identity-hub-consumer1-postgres"
+
+# -----------------------------------------------------------------------------
+# Provider Identity Hub (the bundle POSTGRES IH) + shared Issuer Service.
+# The bundle `identity-hub-postgres` IS the provider's wallet; its ingress is
+# ih-provider.tx.test so the provider DID is did:web:ih-provider.tx.test:<BPN>. It
+# must stay enabled to satisfy the wallet validator (which gates on
+# `identity-hub`/`identity-hub-postgres`). Config mirrors the shared postgres
+# profile, with the per-participant ingress hosts + a distinct postgres name.
+# -----------------------------------------------------------------------------
+identity-and-trust-bundle:
+  enabled: true
+  ssi-dim-wallet-stub:
+    enabled: false
+  # Disable the in-memory bundle IH; enable the postgres-backed one instead.
+  identity-hub:
+    enabled: false
+  identity-hub-postgres:
+    enabled: true
+    # Bundled postgres backs the SQL stores (ParticipantContexts + issued
+    # credentials) so they survive a pod restart. Vault OFF: the IH uses an
+    # EXTERNAL Vault (see the `vault.hashicorp.url` override below).
+    install:
+      postgresql: true
+      vault: false
+    # CRITICAL for per-participant: point THIS IH at the PROVIDER's connector
+    # Vault, NOT the chart-default shared `<release>-vault`. Two IHs sharing one
+    # Vault both create a `super-user` ParticipantContext and store its API token
+    # under the SAME alias — the second overwrites the first, so the super-user
+    # key the seeding Job scrapes then fails to authenticate (HTTP 401 on the
+    # Identity API) → the whole seed fails. Each participant's IH must have its OWN
+    # Vault; reusing the participant's connector Vault (dev-mode, token `root`,
+    # distinct per participant) avoids the collision with zero extra pods. (The
+    # single-IH shared-postgres profile has no peer to collide with; the in-memory
+    # IHs use per-process in-memory Vaults, so neither needs this.)
+    vault:
+      hashicorp:
+        url: "http://{{ .Release.Name }}-edc-dataprovider-vault:8200"
+    postgresql:
+      nameOverride: ih-provider-postgresql
+      jdbcUrl: "jdbc:postgresql://{{ .Release.Name }}-ih-provider-postgresql:5432/ih"
+    identityhub:
+      livenessProbe:
+        initialDelaySeconds: 90
+        periodSeconds: 15
+        timeoutSeconds: 10
+        failureThreshold: 6
+      readinessProbe:
+        initialDelaySeconds: 90
+        periodSeconds: 15
+        timeoutSeconds: 10
+        failureThreshold: 6
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: 1
+          memory: 2Gi
+      endpoints:
+        identity:
+          authKeyAlias: "sup3r$3cr3t"
+        accounts:
+          authKeyAlias: "sup3r$3cr3t"
+      # Disable the chart's built-in InitialParticipantExtension — participants
+      # are created post-install by the seeding Job (runtime super-user key). The
+      # id/secret below are inert while `enabled: false`.
+      iatp:
+        sts:
+          oauth:
+            client:
+              enabled: false
+              id: "did:web:ih-provider.tx.test:BPNL00000003AYRE"
+              secret: "operator-sts-secret"
+              secret_alias: "operator-sts-secret-alias"
+              x_api_key: "ZGlkOndlYjppaC1wcm92aWRlci50eC50ZXN0OkJQTkwwMDAwMDAwM0FZUkU.placeholder"
+      didweb:
+        https: false
+      ingresses:
+        - enabled: true
+          hostname: "ih-provider.tx.test"
+          endpoints: [credentials, did, sts]
+          className: "nginx"
+          tls:
+            enabled: false
+        - enabled: true
+          hostname: "ih-provider-admin.tx.test"
+          endpoints: [identity, accounts]
+          className: "nginx"
+          tls:
+            enabled: false
+  issuer-service:
+    enabled: true
+    # D25: absolute, cluster-reachable status-list URL embedded into every issued
+    # VC (a non-absolute value breaks downstream VP verifiers → 400).
+    statuslist:
+      callback:
+        address: "http://issuer-service.tx.test/statuslist"
+
+# -----------------------------------------------------------------------------
+# consumer1's dedicated POSTGRES Identity Hub (umbrella-level aliased dep). Same
+# postgres chart as the provider's, with its own ingress host + distinct postgres
+# name; lean-tuned (768Mi limit, heap capped) like the in-memory consumer1.
+# -----------------------------------------------------------------------------
+identity-hub-consumer1-postgres:
+  enabled: true
+  install:
+    postgresql: true
+    vault: false
+  # Point this IH at CONSUMER1's connector Vault (distinct from the provider IH's)
+  # — see the collision note on the provider IH above. Without a per-IH Vault the
+  # two super-user tokens overwrite each other in the shared Vault → seed 401.
+  vault:
+    hashicorp:
+      url: "http://{{ .Release.Name }}-edc-dataconsumer-1-vault:8200"
+  postgresql:
+    nameOverride: ih-consumer1-postgresql
+    jdbcUrl: "jdbc:postgresql://{{ .Release.Name }}-ih-consumer1-postgresql:5432/ih"
+  identityhub:
+    livenessProbe:
+      initialDelaySeconds: 90
+      periodSeconds: 15
+      timeoutSeconds: 10
+      failureThreshold: 6
+    readinessProbe:
+      initialDelaySeconds: 90
+      periodSeconds: 15
+      timeoutSeconds: 10
+      failureThreshold: 6
+    resources:
+      requests:
+        cpu: 150m
+        memory: 320Mi
+      limits:
+        cpu: 1
+        memory: 768Mi
+    # Cap heap to ~50% of the 768Mi limit.
+    env:
+      JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=50.0"
+    endpoints:
+      identity:
+        authKeyAlias: "sup3r$3cr3t"
+      accounts:
+        authKeyAlias: "sup3r$3cr3t"
+    iatp:
+      sts:
+        oauth:
+          client:
+            enabled: false
+            id: "did:web:ih-consumer1.tx.test:BPNL00000003AZQP"
+            secret: "operator-sts-secret"
+            secret_alias: "operator-sts-secret-alias"
+            x_api_key: "ZGlkOndlYjppaC1jb25zdW1lcjEudHgudGVzdDpCUE5MMDAwMDAwMDNBWlFQ.placeholder"
+    didweb:
+      https: false
+    ingresses:
+      - enabled: true
+        hostname: "ih-consumer1.tx.test"
+        endpoints: [credentials, did, sts]
+        className: "nginx"
+        tls:
+          enabled: false
+
+# The in-memory per-participant IH aliases are unused in this postgres topology.
+identity-hub:
+  enabled: false
+identity-hub-consumer1:
+  enabled: false
+identity-hub-provider:
+  enabled: false
+identity-hub-consumer2:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# EDC connectors → each participant's OWN Identity Hub. IDENTICAL to the in-memory
+# per-participant profile: the postgres IHs keep the same ingress hosts
+# (ih-provider.tx.test / ih-consumer1.tx.test), DIDs, and credential-service URLs —
+# only the IH backing store + in-cluster service names changed.
+# -----------------------------------------------------------------------------
+dataconsumerOne:
+  enabled: true
+  wallet:
+    mode: identityHub
+    # The provider's tx-data-provider instance runs THE single seeding Job; disable
+    # the redundant per-consumer Job.
+    identityHubSeed:
+      enabled: false
+  dataspace-connector-bundle:
+    tractusx-connector:
+      dcp:
+        trustedIssuers:
+          - did:web:issuer-service.tx.test:BPNL00000003CRHK
+        sts:
+          div:
+            url: ""
+          oauth:
+            token_url: http://ih-consumer1.tx.test/api/sts/token
+            client:
+              id: did:web:ih-consumer1.tx.test:BPNL00000003AZQP
+              secret_alias: edc-wallet-secret
+      participant:
+        id: did:web:ih-consumer1.tx.test:BPNL00000003AZQP
+        bpnl: BPNL00000003AZQP
+        # plain participantContextId (EDC 0.17.0 / IH #937)
+        contextId: "consumer-bpnl00000003azqp"
+      controlplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://ih-consumer1.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://ih-consumer1.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+        bdrs:
+          server:
+            url: http://bdrs-server:8082/api/directory
+      dataplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://ih-consumer1.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://ih-consumer1.tx.test/api/credentials/v1/participants/consumer-bpnl00000003azqp
+
+tx-data-provider:
+  enabled: true
+  wallet:
+    mode: identityHub
+    # THE single Identity-Hub seeding Job. Its bootstrap IdentityHub is the
+    # provider's postgres IH (alias `identity-hub-postgres`), so the readiness-wait
+    # + super-user-key scrape must target that pod label rather than the default
+    # `identity-hub` (which matches only the in-memory variant). The per-participant
+    # loop then reaches consumer1's dedicated IH via the serviceBase map above.
+    identityHubSeed:
+      enabled: true
+      identityHubPodLabel: "app.kubernetes.io/name=identity-hub-postgres"
+  dataspace-connector-bundle:
+    tractusx-connector:
+      dcp:
+        trustedIssuers:
+          - did:web:issuer-service.tx.test:BPNL00000003CRHK
+        sts:
+          div:
+            url: ""
+          oauth:
+            token_url: http://ih-provider.tx.test/api/sts/token
+            client:
+              id: did:web:ih-provider.tx.test:BPNL00000003AYRE
+              secret_alias: edc-wallet-secret
+      participant:
+        id: did:web:ih-provider.tx.test:BPNL00000003AYRE
+        bpnl: BPNL00000003AYRE
+        # plain participantContextId (EDC 0.17.0 / IH #937)
+        contextId: "provider-bpnl00000003ayre"
+      controlplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://ih-provider.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://ih-provider.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+        bdrs:
+          server:
+            url: http://bdrs-server:8082/api/directory
+      dataplane:
+        env:
+          TX_EDC_IAM_DCP_CREDENTIALSERVICE_URL: http://ih-provider.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+          TX_IAM_IATP_CREDENTIALSERVICE_URL: http://ih-provider.tx.test/api/credentials/v1/participants/provider-bpnl00000003ayre
+
+# consumer2 connector is not part of the 2-participant topology.
+dataconsumerTwo:
+  enabled: false
+
+# BDRS — re-seed with the two participants' per-host DIDs (same as the in-memory
+# per-participant profile). BDRS itself is still in-memory (Phase 3 replaces it
+# with a postgres chart); its directory is re-seeded on install.
+bdrs-server-memory:
+  enabled: true
+  seeding:
+    enabled: true
+    bpnList:
+      - bpn: "BPNL00000003AYRE"
+        did: "did:web:ih-provider.tx.test:BPNL00000003AYRE"
+      - bpn: "BPNL00000003AZQP"
+        did: "did:web:ih-consumer1.tx.test:BPNL00000003AZQP"
+  server:
+    trustedIssuers:
+      - did:web:issuer-service.tx.test:BPNL00000003CRHK
+    env:
+      EDC_IAM_DID_WEB_USE_HTTPS: false
+    endpoints:
+      management:
+        authKey: TEST

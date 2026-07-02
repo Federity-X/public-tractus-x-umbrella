@@ -104,6 +104,14 @@ identity-hub-consumer2:
       repository: docker-identityhub-memory
       tag: latest
       pullPolicy: Never
+# consumer1's POSTGRES per-participant IH (per-participant-postgres profile). Uses
+# the NON-memory 0.17.0 build (docker-identityhub:latest), like identity-hub-postgres.
+identity-hub-consumer1-postgres:
+  identityhub:
+    image:
+      repository: docker-identityhub
+      tag: latest
+      pullPolicy: Never
 
 # --- Connector control/data planes: EDC 0.17.0 snapshot images ---
 tx-data-provider:

@@ -39,8 +39,29 @@
 ###############################################################
 
 # Connector DBs (dataspace-connector-bundle) — provider + consumer1.
+#
+# BUGFIX: the connector control-plane ships a tight liveness probe (initialDelay 30
+# + 6×10 ≈ 90s). Under the heavier per-participant-POSTGRES build (two extra IH
+# Postgres pods) the startup stampede delays the control-plane's boot past that
+# budget, so the kubelet SIGTERM-kills it mid-boot (exitCode 143, observed at ~89s)
+# — and it can come back in a half-initialised state (readiness endpoint 404s), which
+# then blocks the data-plane self-registration and the post-install test-data hook,
+# failing the whole install. There is no startupProbe, so widen the liveness/readiness
+# budget (~90 + 20×15 ≈ 390s) so a contended boot completes before the probe fires.
+# (Same rationale + pattern as the issuer-service and BDRS probe widenings below;
+# harmless on a fast/uncontended node.)
 tx-data-provider:
   dataspace-connector-bundle:
+    tractusx-connector:
+      controlplane:
+        livenessProbe:
+          initialDelaySeconds: 90
+          periodSeconds: 15
+          failureThreshold: 20
+        readinessProbe:
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          failureThreshold: 20
     postgresql:
       primary:
         persistence:
@@ -48,6 +69,16 @@ tx-data-provider:
           size: 5Gi
 dataconsumerOne:
   dataspace-connector-bundle:
+    tractusx-connector:
+      controlplane:
+        livenessProbe:
+          initialDelaySeconds: 90
+          periodSeconds: 15
+          failureThreshold: 20
+        readinessProbe:
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          failureThreshold: 20
     postgresql:
       primary:
         persistence:
