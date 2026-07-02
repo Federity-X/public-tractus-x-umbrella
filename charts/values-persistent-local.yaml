@@ -82,3 +82,22 @@ identity-and-trust-bundle:
         initialDelaySeconds: 120
         periodSeconds: 15
         failureThreshold: 40
+
+# BUGFIX: the in-memory BDRS ships a very tight liveness probe (initialDelay 5 +
+# 6×5 ≈ 35s). Under the persistent build's added node contention it gets
+# SIGTERM-killed mid-startup and crash-loops (17 restarts observed); each restart
+# wipes its in-memory BPN→DID directory, so the connector's ContractNegotiation-
+# Finalized BPN resolve fails ("No BPN entry found for agreement") and transfers
+# TERMINATE. Widen its probes so it stays up and the directory (re-seeded by the
+# post-install-bdrs-setup hook) survives. (A BDRS restart still loses the directory
+# — the documented in-memory-BDRS limitation; keeping it up is the fix here.)
+bdrs-server-memory:
+  server:
+    livenessProbe:
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      failureThreshold: 30
+    readinessProbe:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      failureThreshold: 30
