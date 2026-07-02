@@ -321,31 +321,43 @@ The [`fx-connector-ui`](https://github.com/Federity-X/fx-connector-ui) admin pan
 this per-participant deployment (manage assets/policies/contract-definitions, browse and
 consume catalogs over DCP, inspect wallets and credentials, and administer the issuer).
 
-To expose everything the panel needs, layer the **plus** overlay as a third `-f`:
+To expose everything the panel needs, layer the **plus** overlay (consumer1 admin ingress +
+CentralIDP) and point CentralIDP at your locally-built init-container image. For a **durable,
+prod-alike** build on a larger node (≈36 GB), also add the persistence overlay
+(`values-persistent-local.yaml`) — omit that one `-f` for the lean, ephemeral build:
 
 ```bash
 helm install umbrella charts/umbrella \
   -f charts/values-test-data-exchange-identity-hub-per-participant.yaml \
   -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
   -f charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml \
+  -f charts/values-persistent-local.yaml \
+  --set centralidp.realmSeeding.initContainer.image.name=umbrella-init-container:be241 \
+  --set centralidp.realmSeeding.initContainer.image.pullPolicy=Never \
   --namespace umbrella --create-namespace --timeout 25m
 ```
+
+(Build `umbrella-init-container:be241` from `init-container/` and `kind load` it first — it
+carries the panel's realm client + `login_theme`. Drop the `-f values-persistent-local.yaml`
+line for a lean/ephemeral run.)
 
 The overlay ([`…-per-participant-plus.yaml`](../../../../charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml),
 see its header for full notes) adds:
 
 - **consumer1 IdentityHub admin ingress** (`ih-consumer1-admin.tx.test`) so the panel's
   Wallet page works for consumer1, not just the provider. No new pod. *Validated.*
-- **CentralIDP** (Keycloak) for the panel's optional OIDC login. The panel's OIDC client
-  `fx-connector-ui` + `participant`/`role` claim mappers + test users live in this repo's
-  realm import (`init-container/iam/centralidp/CX-Central-realm.json`), which is baked into
-  the `umbrella-init-container` image — **rebuild that image locally** (into your cluster
-  registry) after editing the realm, then point `centralidp.realmSeeding.initContainer.image`
-  at it. *This CentralIDP block is not yet validated on a full deploy* — bring it up on a
-  larger node (≈36 GB) and tune resources / realm seeding there. The issuer admin API
-  (`issuer-service-admin.tx.test/api/admin`) is already exposed by the defaults.
+- **CentralIDP** (Keycloak) for the panel's OIDC login. The client `fx-connector-ui` +
+  `participant`/`role` claim mappers + a per-client `login_theme` + test users live in this
+  repo's realm import (`init-container/iam/centralidp/CX-Central-realm.json`), baked into the
+  `umbrella-init-container` image — rebuild it locally after editing the realm. *Validated
+  live (12 GiB VM): the panel's Keycloak login works and maps participant/role.* The issuer
+  admin API (`issuer-service-admin.tx.test/api/admin`) is exposed by the defaults.
+- **`values-persistent-local.yaml`** (durable builds) gives the connector + CentralIDP
+  Postgres PVCs so DBs survive restarts, and widens the issuer-service startup probe (a
+  PVC-attach delay otherwise flaps it and breaks credential seeding). ~0 extra RAM. NOTE: full
+  restart durability also needs Vault out of dev mode — see the handoff §7b.
 
-The panel repo's [docs/HANDOFF-BE-241.md](https://github.com/Federity-X/fx-connector-ui/blob/main/docs/HANDOFF-BE-241.md)
+The panel repo's [docs/HANDOFF-BE-241.md](https://github.com/Federity-X/fx-connector-ui/blob/feature/BE-241-test-all-features/docs/HANDOFF-BE-241.md)
 is the end-to-end runbook (deploy → per-install key extraction → run → verify → the
 deferred live-OIDC step).
 
@@ -377,6 +389,7 @@ is the entry point):
 - [Persistent / PostgreSQL IdentityHub](../../../../charts/values-test-data-exchange-identity-hub-postgres.yaml) — `…-postgres.yaml`
 - [Local-image overlay (EDC-0.17.0 stack)](../../../../charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml) — `…-local-0.17.0.yaml`
 - [Per-participant-plus overlay (admin panel: consumer1 admin ingress + CentralIDP)](../../../../charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml) — `…-per-participant-plus.yaml`
+- [Persistence overlay (durable/prod-alike storage + issuer-probe fix)](../../../../charts/values-persistent-local.yaml) — `values-persistent-local.yaml`
 
 **Tooling and templates:**
 
