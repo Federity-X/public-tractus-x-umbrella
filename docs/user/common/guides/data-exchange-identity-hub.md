@@ -379,8 +379,9 @@ connector + IdentityHub + issuer secrets survive a Vault pod restart). Verified 
 killing all three Vault pods leaves their secrets byte-identical (they re-unseal from
 the PVC via the init `postStart`) and the DCP transfer still passes. Drop the
 `-f values-vault-prod-local.yaml` line to keep the fast dev-mode Vault (secrets then
-reset on a Vault restart). BDRS is still in-memory until Phase 3. See the handoff §7
-for the full durability roadmap.
+reset on a Vault restart). BDRS is still in-memory until Phase 3. See the dedicated
+[Prod-alike durable build](prod-alike-durable-build.md) guide for the persistence
+boundaries, the fixed-id-token Vault mechanism, and the durability roadmap.
 
 The overlay ([`…-per-participant-plus.yaml`](../../../../charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml),
 see its header for full notes) adds:
