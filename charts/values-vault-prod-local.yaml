@@ -1,0 +1,186 @@
+###############################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+###############################################################
+#
+# PROD-ALIKE DURABILITY (part 7b / Phase 2) — HashiCorp Vault in PROD mode.
+#
+# Layer this overlay LAST, on top of a persistent identityHub profile + the
+# persistence overlay, to take the per-participant Vaults out of dev mode so
+# their secrets survive a Vault pod / Docker / VM restart. Without it the Vaults
+# run `server -dev` (in-memory): a Vault restart wipes edc-wallet-secret + the EDC
+# token-signing keys + the IdentityHub STS/keypair secrets, and DCP breaks
+# (`Failed to fetch client secret from the vault with alias: edc-wallet-secret`,
+# then IH STS 401) even though the Postgres/IdentityHub SQL state (Phase 1)
+# survives.
+#
+# WHAT IT DOES (per Vault): disable dev mode, back /vault/data with a PVC (file
+# storage), and replace the dev postStart with an init/unseal bootstrap that runs
+# `vault operator init` ONCE (persisting the unseal key + root token on the PVC),
+# unseals on every (re)start, enables the KV-v2 engine at `secret/`, and creates a
+# Vault token with a FIXED, KNOWN id (`txedcvaulttoken`) under a secret-RW policy.
+# Because the id is fixed, every consumer keeps using a known token value baked
+# into config (below) — no runtime token propagation / k8s-Secret plumbing needed.
+# (A prod Vault otherwise generates a RANDOM root token at init, unknown at
+# template time.) `max_lease_ttl` is raised so the token gets a ~10y TTL instead of
+# being capped to Vault's 768h default.
+#
+# SCOPE (this file): the two per-participant CONNECTOR Vaults (provider +
+# consumer1), which hold the DCP-critical secrets (edc-wallet-secret, EDC token
+# signing keys) and — since Phase 1 — each participant's IdentityHub secrets too.
+# The issuer-service Vault is converted in a follow-up (its keys only gate issuing
+# NEW credentials; already-issued VCs live in the durable IdentityHub Postgres).
+#
+# SANDBOX CAVEAT: the unseal key + root token are stored in plaintext at
+# /vault/data/init.txt on the PVC (single-key, key-threshold 1). Acceptable for a
+# LOCAL prod-alike sandbox; NOT a pattern for real production (use auto-unseal +
+# a KMS + proper auth there).
+#
+# Usage (durable + prod-vault stack):
+#   helm install umbrella charts/umbrella \
+#     -f charts/values-test-data-exchange-identity-hub-per-participant-postgres.yaml \
+#     -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml \
+#     -f charts/values-test-data-exchange-identity-hub-per-participant-postgres-plus.yaml \
+#     -f charts/values-persistent-local.yaml \
+#     -f charts/values-vault-prod-local.yaml \
+#     --set centralidp.realmSeeding.initContainer.image.name=umbrella-init-container:be241 \
+#     --set centralidp.realmSeeding.initContainer.image.pullPolicy=Never \
+#     --namespace umbrella --create-namespace --timeout 25m
+###############################################################
+
+# ---- shared prod-Vault server config (both connector Vaults are identical) ----
+_vaultProdServer: &vaultProdServer
+  # Prod mode: file storage on the PVC instead of in-memory dev mode.
+  dev:
+    enabled: false
+  standalone:
+    enabled: true
+    # HCL matches the chart default + raises max_lease_ttl so the fixed token is
+    # not capped to 768h, and disables mlock (containers cannot mlock).
+    config: |
+      ui = false
+      disable_mlock = true
+      max_lease_ttl = "87600h"
+      default_lease_ttl = "87600h"
+      listener "tcp" {
+        tls_disable = 1
+        address = "[::]:8200"
+        cluster_address = "[::]:8201"
+      }
+      storage "file" {
+        path = "/vault/data"
+      }
+  dataStorage:
+    enabled: true
+    size: 1Gi
+    mountPath: /vault/data
+  # init-once / unseal-always / enable-kv / create-fixed-token / seed. Idempotent:
+  # re-runs on every (re)start skip init and just re-unseal; the fixed token +
+  # secrets persist in the file store (PVC).
+  postStart:
+    - /bin/sh
+    - -c
+    - |
+      set -eu
+      export VAULT_ADDR=http://127.0.0.1:8200
+      FIXED=txedcvaulttoken
+      INIT=/vault/data/init.txt
+      # wait until the server answers (rc 0 = unsealed, 2 = sealed; both = up)
+      for i in $(seq 1 60); do
+        vault status >/dev/null 2>&1 && break
+        [ $? -eq 2 ] && break
+        sleep 1
+      done
+      # initialise once; persist the single unseal key + root token on the PVC
+      if ! vault status -format=json 2>/dev/null | grep -q '"initialized": *true'; then
+        vault operator init -key-shares=1 -key-threshold=1 > "$INIT"
+      fi
+      UNSEAL=$(sed -n 's/^Unseal Key 1: //p' "$INIT")
+      ROOT=$(sed -n 's/^Initial Root Token: //p' "$INIT")
+      # unseal if sealed (runs on every restart)
+      if vault status -format=json 2>/dev/null | grep -q '"sealed": *true'; then
+        vault operator unseal "$UNSEAL" >/dev/null
+      fi
+      export VAULT_TOKEN="$ROOT"
+      # KV v2 at secret/ (dev auto-mounts this; prod must enable it)
+      vault secrets list 2>/dev/null | grep -q '^secret/' || \
+        vault secrets enable -path=secret -version=2 kv >/dev/null
+      # secret-RW policy + fixed-id token (idempotent)
+      printf 'path "secret/*" { capabilities = ["create","read","update","delete","list"] }\n' \
+        | vault policy write edc-secrets - >/dev/null
+      vault token lookup "$FIXED" >/dev/null 2>&1 || \
+        vault token create -id="$FIXED" -policy=edc-secrets -orphan -ttl=87600h >/dev/null
+      # seed the connector's initial secrets with the fixed token
+      export VAULT_TOKEN="$FIXED"
+      vault kv put secret/client-secret content=kEmH7QRPWhKfy8f+x0pFMw== >/dev/null
+      vault kv put secret/aesKey content=YWVzX2VuY2tleV90ZXN0Cg== >/dev/null
+
+# ---- shared fixed-token client config (EDC connector + IdentityHub) ----
+_fixedToken: &fixedToken "txedcvaulttoken"
+
+# ============================ Provider ============================
+tx-data-provider:
+  dataspace-connector-bundle:
+    # EDC control/data plane authenticate to Vault with the fixed token.
+    tractusx-connector:
+      vault:
+        hashicorp:
+          token: *fixedToken
+    # The connector's bundled Vault → prod mode.
+    vault:
+      server: *vaultProdServer
+
+# ============================ Consumer 1 ==========================
+dataconsumerOne:
+  dataspace-connector-bundle:
+    tractusx-connector:
+      vault:
+        hashicorp:
+          token: *fixedToken
+    vault:
+      server: *vaultProdServer
+
+# ---- IdentityHubs authenticate to their participant's connector Vault with the
+#      fixed token (Phase 1 pointed each IH at that Vault; the token was `root`). ----
+identity-and-trust-bundle:
+  identity-hub-postgres:
+    vault:
+      hashicorp:
+        token: *fixedToken
+  # ---- Issuer-service Vault (umbrella-vault, chart 0.29.x) → prod mode too. It
+  #      holds the issuer's signing keypair; a dev-mode restart would regenerate it
+  #      and break verification of already-issued VCs. Reuses the same server
+  #      bootstrap (the client-secret/aesKey seed lines are inert for the issuer,
+  #      which writes its own key material at runtime). ----
+  issuer-service:
+    vault:
+      hashicorp:
+        token: *fixedToken
+      server: *vaultProdServer
+identity-hub-consumer1-postgres:
+  vault:
+    hashicorp:
+      token: *fixedToken
+
+# ---- the seeding Jobs write edc-wallet-secret + token-signing keys into each
+#      participant's Vault using this token (baked into the wallet-mode ConfigMap). ----
+wallet:
+  participants:
+    provider:
+      vaultToken: *fixedToken
+    consumer1:
+      vaultToken: *fixedToken
