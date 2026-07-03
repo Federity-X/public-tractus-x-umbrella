@@ -333,7 +333,9 @@ The in-memory BDRS still loses its directory on a BDRS restart until Phase 3
 
 The [`fx-connector-ui`](https://github.com/Federity-X/fx-connector-ui) admin panel drives
 this per-participant deployment (manage assets/policies/contract-definitions, browse and
-consume catalogs over DCP, inspect wallets and credentials, and administer the issuer).
+consume catalogs over DCP — including a guided flow that discovers digital twins through the
+Digital Twin Registry and auto-fills the submodel data path — inspect wallets and credentials,
+and administer the issuer).
 
 To expose everything the panel needs, layer the **plus** overlay (consumer1 admin ingress +
 CentralIDP) and point CentralIDP at your locally-built init-container image. For a **durable,
