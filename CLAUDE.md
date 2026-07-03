@@ -2,7 +2,7 @@
 
 > **⚠️ TEMPORARY — DELETE FROM THE REPO BEFORE MERGE.** This file is committed to the
 > `feature/BE-241-*` branch **only** to give the coding agent on the 36 GB machine full
-> project context (see [docs/HANDOFF-BE-241 in fx-connector-ui](https://github.com/Federity-X/fx-connector-ui/blob/feat/phase1-authoring/docs/HANDOFF-BE-241.md)).
+> project context (see [docs/HANDOFF-BE-241 in fx-connector-ui](https://github.com/Federity-X/fx-connector-ui/blob/main/docs/HANDOFF-BE-241.md)).
 > Once all BE-241 tasks are finished and everything is tested, run `git rm CLAUDE.md`
 > (keep only a local, git-ignored copy) — per this repo's own "never commit CLAUDE.md"
 > rule in *Working rules* below. It must **not** reach `main`.
@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > backend for Phase C, and this umbrella). Their filesystem paths differ per machine. At
 > the start of a session, **ask the user for the local path of each repo you need before
 > running builds** — never assume `~/projects/...`. Full list, remotes, branches, and
-> purpose: [fx-connector-ui `docs/HANDOFF-BE-241.md`](https://github.com/Federity-X/fx-connector-ui/blob/feat/phase1-authoring/docs/HANDOFF-BE-241.md).
+> purpose: [fx-connector-ui `docs/HANDOFF-BE-241.md`](https://github.com/Federity-X/fx-connector-ui/blob/main/docs/HANDOFF-BE-241.md).
 
 ## What this repository is
 
