@@ -74,8 +74,8 @@ _vaultProdServer: &vaultProdServer
     config: |
       ui = false
       disable_mlock = true
-      max_lease_ttl = "87600h"
-      default_lease_ttl = "87600h"
+      max_lease_ttl = "8760h"
+      default_lease_ttl = "8760h"
       listener "tcp" {
         tls_disable = 1
         address = "[::]:8200"
@@ -119,11 +119,19 @@ _vaultProdServer: &vaultProdServer
       # KV v2 at secret/ (dev auto-mounts this; prod must enable it)
       vault secrets list 2>/dev/null | grep -q '^secret/' || \
         vault secrets enable -path=secret -version=2 kv >/dev/null
-      # secret-RW policy + fixed-id token (idempotent)
+      # secret-RW policy + fixed-id token. RE-ISSUE it on every start (revoke the
+      # old one, then create) rather than skip-if-present: a token that already
+      # exists but has a short/expiring TTL would otherwise be left to die, and when
+      # it does the connector loses vault access mid-run ("Failed to fetch client
+      # secret ... edc-wallet-secret", 502) — observed. A ~1y TTL comfortably
+      # outlives any sandbox session (max_lease_ttl above lets it stick; without
+      # that Vault caps it to the 768h default). NOTE: static token + long TTL is a
+      # SANDBOX choice; production uses Kubernetes auth via the Vault Agent Injector
+      # with short auto-renewed tokens — see docs .../vault-sandbox-vs-production.md.
       printf 'path "secret/*" { capabilities = ["create","read","update","delete","list"] }\n' \
         | vault policy write edc-secrets - >/dev/null
-      vault token lookup "$FIXED" >/dev/null 2>&1 || \
-        vault token create -id="$FIXED" -policy=edc-secrets -orphan -ttl=87600h >/dev/null
+      vault token revoke "$FIXED" >/dev/null 2>&1 || true
+      vault token create -id="$FIXED" -policy=edc-secrets -orphan -ttl=8760h >/dev/null
       # seed the connector's initial secrets with the fixed token
       export VAULT_TOKEN="$FIXED"
       vault kv put secret/client-secret content=kEmH7QRPWhKfy8f+x0pFMw== >/dev/null

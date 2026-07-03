@@ -128,10 +128,13 @@ Verified live on kind (per-participant-postgres + persistence + vault-prod):
 ## Caveats
 
 - **Sandbox-only Vault bootstrap.** The unseal key + root token are stored in
-  plaintext at `/vault/data/init.txt` on the PVC (single unseal key, threshold 1).
-  Acceptable for a local prod-alike sandbox; **not** a production pattern — real
-  production uses auto-unseal + a KMS + proper auth (AppRole / Kubernetes auth) with
-  token renewal, not a static fixed-id token.
+  plaintext at `/vault/data/init.txt` on the PVC (single unseal key, threshold 1),
+  and the connector authenticates with a static fixed-id token. Acceptable for a
+  local prod-alike sandbox; **not** a production pattern. The full sandbox-vs-prod
+  analysis (why we chose this, and the exact production controls — auto-unseal +
+  KMS, Kubernetes auth via the Vault Agent Injector, least-privilege policies, Raft
+  HA) is in [Vault: sandbox vs production](vault-sandbox-vs-production.md), written
+  for the infra team.
 - **Startup contention.** The durable stack is heavier (extra Postgres pods). On a
   tight node the startup stampede can delay a JVM past its probe budget; the widened
   probes in `values-persistent-local.yaml` (connector control-plane, issuer, BDRS)
