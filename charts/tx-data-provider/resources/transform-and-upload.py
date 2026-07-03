@@ -120,6 +120,21 @@ def create_edc_contract_definition_payload(access_policy_id_, contract_policy_id
     })
 
 
+def to_id_short(value_, prefix_):
+    """AAS `idShort` must match ^[a-zA-Z][a-zA-Z0-9_-]*[a-zA-Z0-9_]+$ — a UUID urn
+    (uuid.uuid4().urn -> "urn:uuid:...") fails it because of the colons, which is
+    why shell/submodel registration was rejected. Derive a valid idShort: for a
+    semantic id use the aspect name (fragment after '#', e.g. "SingleLevelBomAsBuilt"
+    — the Catena-X convention); keep only [A-Za-z0-9_-]; ensure it starts with a
+    letter and ends with an alphanumeric/underscore; fall back to a prefixed uuid."""
+    frag = value_.split("#")[-1] if value_ else ""
+    s = "".join(c if (c.isalnum() or c in "_-") else "_" for c in frag)
+    s = s.lstrip("_-0123456789").rstrip("-")
+    if len(s) < 2:
+        s = f"{prefix_}_{uuid.uuid4().hex[:8]}"
+    return s
+
+
 def create_aas_shell_3_0(global_asset_id_, id_short_, identification_, specific_asset_id_, submodel_descriptors_):
     return json.dumps({
         "description": [],
@@ -598,9 +613,9 @@ if __name__ == "__main__":
                     dataplane_url = dataplane_urls[contract_number % len(dataplane_urls)]
                     edc_asset_id = edc_asset_ids[contract_number % len(edc_asset_ids)]
 
-                    id_short = uuid.uuid4().urn
-                    submodel_identification = uuid.uuid4().urn
                     semantic_id = tmp_key
+                    id_short = to_id_short(semantic_id, "submodel")
+                    submodel_identification = uuid.uuid4().urn
 
                     endpoint_address = f"{dataplane_url}{dataplane_public_path}/{submodel_identification}"
                     descriptor = create_submodel_descriptor_3_0(id_short, submodel_identification, semantic_id,
@@ -636,7 +651,7 @@ if __name__ == "__main__":
 
             if submodel_descriptors:
                 print("Create aas shell")
-                id_short = uuid.uuid4().urn
+                id_short = f"shell_{uuid.uuid4().hex[:12]}"
                 payload = create_aas_shell_3_0(catenax_id, id_short, identification, specific_asset_ids,
                                                submodel_descriptors)
                 response = session.request(method="POST", url=f"{aas_upload_url}{registry_path}",
