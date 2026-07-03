@@ -401,7 +401,7 @@ see its header for full notes) adds:
   PVC-attach delay otherwise flaps it and breaks credential seeding). ~0 extra RAM. NOTE: full
   restart durability also needs Vault out of dev mode — see the handoff §7b.
 
-The panel repo's [docs/HANDOFF-BE-241.md](https://github.com/Federity-X/fx-connector-ui/blob/feature/BE-241-test-all-features/docs/HANDOFF-BE-241.md)
+The panel repo's [docs/HANDOFF-BE-241.md](https://github.com/Federity-X/fx-connector-ui/blob/feat/phase1-authoring/docs/HANDOFF-BE-241.md)
 is the end-to-end runbook (deploy → per-install key extraction → run → verify → the
 deferred live-OIDC step).
 
