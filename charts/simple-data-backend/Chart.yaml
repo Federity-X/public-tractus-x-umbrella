@@ -42,3 +42,12 @@ version: 0.1.0
 # follow Semantic Versioning. They should reflect the version the application is using.
 # It is recommended to use it with quotes.
 appVersion: "0.0.1"
+
+# Optional PostgreSQL for durable storage. Disabled by default: with it off the backend
+# uses its embedded in-memory H2 store (data lost on restart, the original behaviour).
+# Enable it (and point the datasource env at it) for a restart-durable deployment.
+dependencies:
+  - name: postgresql
+    version: 15.2.1
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

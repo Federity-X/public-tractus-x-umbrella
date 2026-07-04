@@ -67,6 +67,25 @@ tx-data-provider:
         persistence:
           enabled: true
           size: 5Gi
+  # Submodel backend → PostgreSQL so seeded submodel documents survive a restart
+  # (otherwise the in-memory H2 default is wiped on any pod restart and every
+  # DTR-advertised data path 500s until a re-seed). Requires the JPA-capable
+  # simple-data-backend image; pinned to the locally-built tag until it is released.
+  data-persistence-layer-bundle:
+    simple-data-backend:
+      image:
+        repository: tractusx/simple-data-backend
+        tag: jpa
+        pullPolicy: Never
+      postgresql:
+        enabled: true
+      env:
+        - name: SPRING_DATASOURCE_URL
+          value: jdbc:postgresql://submodel-postgresql:5432/submodels
+        - name: SPRING_DATASOURCE_USERNAME
+          value: sdb
+        - name: SPRING_DATASOURCE_PASSWORD
+          value: sdb-password
 dataconsumerOne:
   dataspace-connector-bundle:
     tractusx-connector:

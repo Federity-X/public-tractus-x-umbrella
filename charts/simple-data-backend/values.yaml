@@ -35,6 +35,29 @@ image:
 
 imagePullSecrets: []
 
+# Extra environment variables for the backend container. Use these to point the
+# datasource at PostgreSQL for a durable deployment, e.g.:
+#   env:
+#     - name: SPRING_DATASOURCE_URL
+#       value: jdbc:postgresql://<release>-submodel-postgresql:5432/submodels
+#     - name: SPRING_DATASOURCE_USERNAME
+#       value: sdb
+#     - name: SPRING_DATASOURCE_PASSWORD
+#       value: <password>
+env: []
+
+# Optional bundled PostgreSQL for restart-durable storage. Off by default (embedded
+# in-memory H2). When enabled, also set the SPRING_DATASOURCE_* env above to point at
+# the resulting service.
+postgresql:
+  enabled: false
+  auth:
+    database: submodels
+    username: sdb
+    password: sdb-password
+  # Keep the service name predictable so the datasource URL above can reference it.
+  fullnameOverride: submodel-postgresql
+
 podAnnotations: {}
 
 podSecurityContext: {}

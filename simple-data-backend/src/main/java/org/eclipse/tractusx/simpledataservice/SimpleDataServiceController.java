@@ -20,8 +20,10 @@
  ********************************************************************************/
 package org.eclipse.tractusx.simpledataservice;
 
-import java.util.HashMap;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -33,35 +35,48 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * Stores submodel documents in a JPA repository. With the embedded H2 default the data
+ * is in-memory (lost on restart, matching the original behaviour); pointing
+ * {@code spring.datasource.*} at a PostgreSQL instance makes it durable across restarts.
+ */
 @RestController
 @RequestMapping
+@RequiredArgsConstructor
 @Slf4j
 public class SimpleDataServiceController {
-    private final HashMap<String, Object> data = new HashMap<>();
+
+    private final SubmodelDataRepository repository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostMapping("/{id}")
     public void addData(@PathVariable final String id, @RequestBody final Object payload) {
         log.info("Adding data for id '{}'", id);
-        data.put(id, payload);
+        try {
+            repository.save(new SubmodelData(id, objectMapper.writeValueAsString(payload)));
+        } catch (JsonProcessingException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payload is not serializable: " + e.getMessage());
+        }
     }
 
     @GetMapping({"/{id}", "/{id}/$value"})
     public Object getData(@PathVariable final String id) {
-        if (data.containsKey(id)) {
-            log.info("Returning data for id '{}'", id);
-            return data.get(id);
-        } else {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No data found with id '%s'".formatted(id));
+        SubmodelData entity = repository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No data found with id '%s'".formatted(id)));
+        log.info("Returning data for id '{}'", id);
+        try {
+            return objectMapper.readValue(entity.getPayload(), Object.class);
+        } catch (JsonProcessingException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Stored payload is corrupt: " + e.getMessage());
         }
     }
 
     @DeleteMapping("/{id}")
     public void deleteData(@PathVariable final String id) {
-        if (data.containsKey(id)) {
-            log.info("Deleting data for id '{}'", id);
-            data.remove(id);
-        } else {
+        if (!repository.existsById(id)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No data found with id '%s'".formatted(id));
         }
+        log.info("Deleting data for id '{}'", id);
+        repository.deleteById(id);
     }
 }

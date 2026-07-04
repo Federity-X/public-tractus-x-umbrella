@@ -4,3 +4,14 @@ server:
 spring:
   application:
     name: simple-data-backend
+  # Default store is embedded in-memory H2 (data lost on restart — the original
+  # behaviour). For a durable deployment, override spring.datasource.* (e.g. via
+  # SPRING_DATASOURCE_URL / _USERNAME / _PASSWORD) to point at a PostgreSQL instance.
+  datasource:
+    url: jdbc:h2:mem:submodels;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
