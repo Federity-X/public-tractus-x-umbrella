@@ -39,7 +39,7 @@ helm install umbrella charts/umbrella \
 | `values-test-data-exchange-identity-hub-per-participant-postgres.yaml` | Base topology: provider + consumer1, each on its **own PostgreSQL-backed** IdentityHub (Phase 1). |
 | `values-test-data-exchange-identity-hub-local-0.17.0.yaml` | In-flight EDC-0.17.0 image pins (built from source; see the companion guide). |
 | `values-test-data-exchange-identity-hub-per-participant-postgres-plus.yaml` | Admin-panel extras: consumer1 IdentityHub admin ingress + CentralIDP (Keycloak). |
-| `values-persistent-local.yaml` | Postgres PVCs (connectors + CentralIDP) + widened startup probes (issuer, BDRS, connector control-plane). |
+| `values-persistent-local.yaml` | Postgres PVCs (connectors + CentralIDP) + the **submodel backend on PostgreSQL** (its JPA image, Phase 3) + widened startup probes (issuer, BDRS, connector control-plane, submodel backend). |
 | `values-vault-prod-local.yaml` | All three Vaults in **prod mode** (PVC file storage + init/unseal + a fixed-id token) — Phase 2. |
 
 ## Phase 1 — persistent per-participant IdentityHubs
@@ -74,8 +74,11 @@ Per Vault the overlay:
   the PVC), **unseal on every (re)start**, enable the KV-v2 engine at `secret/`, and
   create a Vault token with a **fixed, known id** (`txedcvaulttoken`) under a
   secret-RW policy;
-- raises `max_lease_ttl` so that fixed token gets a ~10-year TTL instead of Vault's
-  768h default.
+- creates that token as a **periodic** token (`-period`, ~1y) rather than a plain
+  fixed-TTL one: EDC's scheduled token-renew drives a plain-TTL token's lease *down* to
+  the small renew increment (~300s), so one missed renewal kills it and DCP breaks; a
+  periodic token has its TTL **reset to the full period on every renew** (see the
+  [Vault sandbox-vs-production guide](vault-sandbox-vs-production.md)).
 
 The **fixed-id token** is the key simplification: because the id is chosen (not the
 random root token a prod Vault generates at init), every consumer keeps using a
@@ -84,15 +87,21 @@ known value baked into config at template time — the connector EDC client
 ConfigMap `vaultToken` the seeding Jobs read. No runtime token propagation via k8s
 Secrets is needed.
 
-## Phase 3 — BDRS (not yet done)
+## Phase 3 — submodel backend (done) + BDRS (remaining)
 
-BDRS (`bdrs-server-memory`) is still in-memory. There is **no upstream persistent
-BDRS chart**, so making it durable means packaging one from the upstream
-`bdrs-server` source. Its BPN→DID directory is **derived config** — re-seeded from
-`bdrs-server-memory.seeding.bpnList` by the `post-install-bdrs-setup` hook on every
-install/upgrade — so it is not primary state; `values-persistent-local.yaml` only
-widens its probe so it stays up (a BDRS **pod** restart still loses the directory
-until Phase 3 lands). The submodel backend is likewise in-memory seeded test data.
+**Submodel backend — done.** `simple-data-backend` now backs its store with Spring
+Data JPA: the embedded H2 default keeps lean profiles in-memory, and this durable
+overlay points it at a bundled **PostgreSQL** (its `:jpa` image + `SPRING_DATASOURCE_*`
+env), so seeded submodel documents survive a restart. This closes the gap where a
+submodel-backend restart wiped all data while the Postgres-backed DTR kept advertising
+the now-dangling paths (every data pull then `500`'d until a manual re-seed).
+
+**BDRS — remaining.** BDRS (`bdrs-server-memory`) is still in-memory. There is **no
+upstream persistent BDRS chart**, so making it durable means packaging one from the
+upstream `bdrs-server` source. Its BPN→DID directory is **derived config** — re-seeded
+from `bdrs-server-memory.seeding.bpnList` by the `post-install-bdrs-setup` hook on every
+install/upgrade — so it is not primary state; `values-persistent-local.yaml` only widens
+its probe so it stays up (a BDRS **pod** restart still loses the directory until this lands).
 
 ## Persistence boundary — what survives what
 
@@ -103,12 +112,12 @@ until Phase 3 lands). The submodel backend is likewise in-memory seeded test dat
 | IssuerService DB | PostgreSQL + PVC | yes | yes |
 | CentralIDP (Keycloak) | PostgreSQL + PVC | yes | yes |
 | Vault secrets (edc-wallet-secret, signing keys, IH + issuer keys) | Vault prod, file storage + PVC | yes (re-unseals from PVC) | yes |
+| Submodel backend data | PostgreSQL + PVC (JPA) | yes | yes |
 | **BDRS directory** | in-memory (derived) | **no** (re-seeded on install/upgrade) | **no** |
-| Submodel backend data | in-memory (seeded test data) | **no** (re-seeded on install) | **no** |
 
-After Phases 1 + 2, **all primary state is durable**; only *derived* data (the BDRS
-directory, submodel test data) is still ephemeral, and both are re-provisioned on
-install.
+After Phases 1 + 2 + the submodel backend (Phase 3), **all primary state is durable**;
+only the *derived* BDRS directory is still ephemeral, and it is re-provisioned on
+install/upgrade.
 
 ## Verification
 

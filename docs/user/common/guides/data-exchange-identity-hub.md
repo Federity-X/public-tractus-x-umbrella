@@ -136,7 +136,31 @@ docker tag identityhub:latest        docker-identityhub:latest          # postgr
 docker tag issuerservice:latest      docker-issuerservice:latest        # issuer service
 ```
 
-**3. Load all five images into your cluster** (kind shown; for minikube use
+**3. Digital Twin Registry — from the fork branch (legacy cursor fix + newest-first sort):**
+
+The released `digital-twin-registry` (`0.10.0`) has two gaps this build closes: its
+`/shell-descriptors` pagination cursor is ignored in legacy mode (the default), so a
+client cannot page past the first page ([PR #604](https://github.com/eclipse-tractusx/sldt-digital-twin-registry/pull/604)),
+and it has no server-side newest-first ordering ([PR #616](https://github.com/eclipse-tractusx/sldt-digital-twin-registry/pull/616),
+which the admin panel uses via `sortDirection=DESC`).
+
+```bash
+git clone https://github.com/Federity-X/public-sldt-digital-twin-registry.git
+cd public-sldt-digital-twin-registry
+git checkout feat/shell-descriptors-sort-direction     # PR #604 (cursor fix) + PR #616 (sortDirection)
+docker build -f backend/Dockerfile -t tractusx/sldt-digital-twin-registry:be241 .
+# arm64 (Apple Silicon): the upstream alpine Temurin base has no arm64 manifest — build with
+# non-alpine bases instead (maven:3-eclipse-temurin-21 builder + eclipse-temurin:21-jre runtime).
+```
+
+**4. Submodel backend (durable build only) — JPA + PostgreSQL, from this repo:**
+
+```bash
+cd simple-data-backend
+docker build -t tractusx/simple-data-backend:jpa .     # same arm64 note as above
+```
+
+**5. Load the images into your cluster** (kind shown; for minikube use
 `minikube image load <name>`):
 
 ```bash
@@ -146,8 +170,14 @@ kind load docker-image \
   docker-issuerservice:latest \
   tractusx/edc-controlplane-postgresql-hashicorp-vault:0.13.0-SNAPSHOT \
   tractusx/edc-dataplane-hashicorp-vault:0.13.0-SNAPSHOT \
+  tractusx/sldt-digital-twin-registry:be241 \
+  tractusx/simple-data-backend:jpa \
   --name <cluster>
 ```
+
+The DTR + submodel-backend images are pinned by the overlays: the DTR by the local-image
+overlay below, and the JPA submodel backend (durable builds only) by
+`values-persistent-local.yaml`.
 
 Finally, layer the local-image overlay
 [`values-test-data-exchange-identity-hub-local-0.17.0.yaml`](../../../../charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml)

@@ -127,6 +127,15 @@ tx-data-provider:
           repository: tractusx/edc-dataplane-hashicorp-vault
           tag: 0.13.0-SNAPSHOT
           pullPolicy: Never
+  # Digital Twin Registry built from the fork branch: legacy pagination-cursor fix
+  # (PR #604) + optional sortDirection=DESC (PR #616). The released 0.10.0 has neither.
+  # version=be241 (a non-latest tag) resolves to the kind-loaded image via the chart's
+  # default IfNotPresent pull policy. Remove once these land in a released DTR.
+  digital-twin-bundle:
+    digital-twin-registry:
+      registry:
+        image:
+          version: be241
 
 dataconsumerOne:
   dataspace-connector-bundle:
