@@ -31,7 +31,7 @@ There are two independent lifecycle concerns: **(1) seal/unseal** and
 | --- | --- | --- |
 | **Unseal** | `vault operator init -key-shares=1 -key-threshold=1` runs once in the `postStart`; the **single unseal key + root token are written in plaintext** to `/vault/data/init.txt` on the PVC; every (re)start auto-unseals by reading that file. | No external KMS/HSM needed; a pod restart self-heals; fully reproducible on a laptop/kind. |
 | **Auth** | A **static token with a fixed, known id** (`txedcvaulttoken`) under one broad `secret/*` read-write policy, baked into every consumer's config (connector `EDC_VAULT_HASHICORP_TOKEN`, IdentityHub vault client, seed-Job `vaultToken`). | A prod Vault mints a *random* root token at init — unknown at Helm-template time. A chosen id lets every consumer keep a known value in config; no runtime token distribution. |
-| **Token lifetime** | A fixed TTL sized to comfortably outlive a sandbox session (~1 year), created at install. | Must outlive a session without a renewal loop (see "Why not a refresh token" below). |
+| **Token lifetime** | A **periodic** token (`-period=8760h`), created at install. Periodic so EDC's scheduled renew *resets* the TTL to the period instead of shrinking it (see "Why not a refresh token"). | Must outlive a session without depending on a fragile renewal loop. |
 | **Storage** | `file` backend on a single PVC (`standalone` mode, 1 replica). | One node, no HA infra. |
 | **Root token** | Left on the PVC (used by the `postStart` on each start). | Convenience — the init/unseal script needs it. |
 | **Policy** | One `secret/*` RW policy shared by all workloads. | Simplicity. |
@@ -48,14 +48,16 @@ and it buys **no security** here because the token already sits in plaintext on 
 PVC. So the sandbox uses a static token with a TTL long enough to outlive a session.
 (This is *not* the production answer — see below.)
 
-> **Operational lesson (why the TTL matters).** An early build created the token
-> with an unintentionally short TTL; the connector kept working until the token
-> expired, then failed abruptly with `Failed to fetch client secret ... edc-wallet-secret`
-> (HTTP 502). Two takeaways baked into the overlay: (1) size the TTL to comfortably
-> exceed any sandbox session (~1 year), and (2) **re-issue the token on every Vault
-> start** (revoke + create, rather than skip-if-present) so a stale or
-> short-lived token can never linger across a redeploy. Neither is a production
-> control — in production the Vault Agent obtains and renews the token (below).
+> **Operational lesson (why the token is periodic).** An early build created the token
+> with a plain fixed TTL (`-ttl=8760h`). It still died: EDC's scheduled token-renew drives
+> a plain-TTL token's lease **down** to the renew increment (~300s) on each renew, so one
+> missed renewal (GC pause, restart lag) kills it within minutes — observed as an abrupt
+> `Failed to fetch client secret ... edc-wallet-secret` (HTTP 502) after ~37h. Three things
+> baked into the overlay: (1) create it as a **periodic** token (`-period=8760h`) so each
+> renew *resets* the TTL to the full period instead of shrinking it; (2) it still lasts the
+> full period even with no renews; and (3) **re-issue it on every Vault start** (revoke +
+> create) so a stale token can never linger across a redeploy. None of these are production
+> controls — in production the Vault Agent obtains and renews the token (below).
 
 ## Production requirements (what infra must change)
 
