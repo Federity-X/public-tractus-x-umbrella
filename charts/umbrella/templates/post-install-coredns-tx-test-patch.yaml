@@ -77,10 +77,12 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "patch", "update"]
-  # Restart the coredns deployment after the patch.
+  # Restart the coredns deployment after the patch, then `rollout status`
+  # (a watch, which needs list+watch — without them the hook times out with
+  # "cannot list deployments in kube-system").
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "patch"]
+    verbs: ["get", "list", "watch", "patch"]
   # Read umbrella-ns ingresses to enumerate .tx.test hostnames.
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]

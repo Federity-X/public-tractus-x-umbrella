@@ -109,6 +109,20 @@ identity-and-trust-bundle:
             enabled: false
   issuer-service:
     enabled: true
+    # Widen the issuer probes: the chart default liveness (90s + 6×15s ≈ 180s) is too
+    # tight on a contended node — the issuer gets SIGTERM-killed mid-startup and flaps
+    # Ready<->NotReady during the IdentityHub seed's credential loop, so the seed's
+    # `kubectl wait` fails / only some credentials issue. (Same rationale as
+    # values-persistent-local.yaml; harmless on an uncontended node.)
+    issuerservice:
+      livenessProbe:
+        initialDelaySeconds: 120
+        periodSeconds: 15
+        failureThreshold: 40
+      readinessProbe:
+        initialDelaySeconds: 30
+        periodSeconds: 15
+        failureThreshold: 40
     # D25: absolute, cluster-reachable status-list URL embedded into every issued
     # VC. A non-absolute value breaks downstream VP verifiers (BDRS revocation-list
     # download → "URI is not absolute" → 400).
@@ -152,6 +166,16 @@ identity-hub-consumer1:
       - enabled: true
         hostname: "ih-consumer1.tx.test"
         endpoints: [credentials, did, sts]
+        className: "nginx"
+        tls:
+          enabled: false
+      # Admin ingress: exposes the Identity API (/api/identity) so the admin panel
+      # can read consumer1's ParticipantContexts/credentials and its health probe
+      # works — mirrors the provider's ih-provider-admin host. Without it the panel's
+      # consumer1 IdentityHub check 404s.
+      - enabled: true
+        hostname: "ih-consumer1-admin.tx.test"
+        endpoints: [identity, accounts]
         className: "nginx"
         tls:
           enabled: false
