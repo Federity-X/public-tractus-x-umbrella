@@ -335,6 +335,37 @@ images …".** The version-mismatch guard fired because the local-image overlay
 was not layered. Add `-f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml`
 (and pre-load the images — see [Version requirement](#version-requirement)).
 
+**`helm install` ends in `failed post-install: timed out`, with `ImagePullBackOff`
+on the public base images** (`postgres`, `bitnamilegacy/postgresql`,
+`bdrs-server-memory`, `simple-data-backend`, `dpage/pgadmin4`, `alpine`,
+`alpine/k8s`, `busybox`). The from-source images are pre-loaded, but the cluster
+**node still pulls the public base images from Docker Hub** — if it can't reach Hub
+(TLS-handshake timeout, rate-limit, offline), they fail and the failure **cascades**:
+no DB → the connector control-planes crash-loop (the vault-setup hook image
+`alpine` also failed, so `edc-wallet-secret` is never seeded) → the seed hooks queued
+behind it time out. Confirm what the node actually has with
+`docker exec <cluster>-control-plane crictl images`. The robust fix is a node with
+working Hub access; on a constrained/offline node, pull on the **host** and
+`kind load` the base images too, so the node never pulls:
+
+```bash
+for i in bitnamilegacy/postgresql:15.4.0-debian-11-r45 tractusx/bdrs-server-memory:0.6.0 \
+         tractusx/simple-data-backend:main alpine:3.19 alpine/k8s:1.29.2 busybox:1.36; do
+  docker pull "$i" && kind load docker-image "$i" --name <cluster>
+done
+```
+
+**`kind load` fails with `ctr: content digest … not found`** — on arm64 / Docker
+Desktop's containerd image store, for multi-arch public images (seen with `alpine`,
+`dpage/pgadmin4`). Export the platform image explicitly instead:
+`docker save <img> -o img.tar && kind load image-archive img.tar --name <cluster>`.
+If even that fails, the host's store lacks that platform's blob — use a node that can
+pull the image directly. Locally-built single-arch images (the `:jpa` / `:be241` /
+connector `:0.13.0-SNAPSHOT` builds) never hit this. The aux **pgAdmin** and its
+**`postgres:18.3`** DB (digest-pinned, `pullPolicy: Always`, **not** in the DCP path)
+can be left in `ImagePullBackOff` or turned off (`--set pgadmin4.enabled=false`) — the
+transfer does not use them.
+
 ### Re-seeding after a pod restart
 
 The in-memory IH (shared / per-participant) and the in-memory BDRS lose their

@@ -1690,6 +1690,14 @@ identity-hub-consumer1:
   enabled: false
 identity-hub-consumer2:
   enabled: false
+# Postgres variant of consumer1's per-participant IdentityHub (umbrella-level dep
+# alias). Default OFF so only the per-participant-POSTGRES profile
+# (values-test-data-exchange-identity-hub-per-participant-postgres.yaml) enables it.
+# Without this default Helm treats the missing condition path as enabled, so the
+# alias would render its own bundled Vault in every profile — colliding with the
+# issuer-service Vault on the `<release>-vault` ServiceAccount and failing install.
+identity-hub-consumer1-postgres:
+  enabled: false
 
 identity-and-trust-bundle:
   enabled: false
