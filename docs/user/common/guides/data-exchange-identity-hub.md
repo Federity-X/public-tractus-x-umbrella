@@ -511,6 +511,7 @@ is the entry point):
 **Background / concepts:**
 
 - [ECOSYSTEM-GUIDE.md](../../../../ECOSYSTEM-GUIDE.md) — DCP / `wallet.mode` concepts and the stub-vs-IdentityHub trust model
+- [Dataspace Runtime & Component Communication](../../../common/architecture/dataspace-runtime-and-communication.md) — the runtime deep-dive: component-communication matrix, the DCP sequence flows (STS → presentation → verify → BDRS → transfer), and the provisioning/seeding lifecycle
 
 **Internal working notes** (provenance only — not part of the user-facing deliverable, and partly historical):
 

@@ -39,6 +39,8 @@ A step-by-step walkthrough of every layer in the Eclipse Tractus-X Umbrella, fro
 
 **In simple terms**: This is a "dataspace-in-a-box" — one `helm install` spins up ~20+ interconnected services that simulate an entire automotive supply chain sharing data.
 
+> **This guide is the structural overview.** For the runtime deep-dive — *who talks to whom*, the DCP round-trips (STS → presentation → verify → BDRS → transfer → data pull), and how a dataspace is provisioned and operated — see the companion **[Dataspace Runtime & Component Communication](docs/common/architecture/dataspace-runtime-and-communication.md)**.
+
 ---
 
 ## 2. Key Concepts You Must Know First
