@@ -149,15 +149,15 @@ git clone https://github.com/Federity-X/public-sldt-digital-twin-registry.git
 cd public-sldt-digital-twin-registry
 git checkout feat/shell-descriptors-sort-direction     # PR #604 (cursor fix) + PR #616 (sortDirection)
 docker build -f backend/Dockerfile -t tractusx/sldt-digital-twin-registry:be241 .
-# arm64 (Apple Silicon): the upstream alpine Temurin base has no arm64 manifest — build with
-# non-alpine bases instead (maven:3-eclipse-temurin-21 builder + eclipse-temurin:21-jre runtime).
+# Builds natively on both amd64 and arm64 (Apple Silicon): the fork's Dockerfile
+# uses the glibc (multi-arch) Temurin bases, not the amd64-only -alpine tags.
 ```
 
 **4. Submodel backend (durable build only) — JPA + PostgreSQL, from this repo:**
 
 ```bash
 cd simple-data-backend
-docker build -t tractusx/simple-data-backend:jpa .     # same arm64 note as above
+docker build -t tractusx/simple-data-backend:jpa .     # builds on amd64 + arm64 (its temurin-21-alpine bases are multi-arch)
 ```
 
 **5. Load the images into your cluster** (kind shown; for minikube use
