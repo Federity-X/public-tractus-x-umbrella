@@ -229,6 +229,12 @@ tx-data-provider:
     identityHubSeed:
       enabled: true
       identityHubPodLabel: "app.kubernetes.io/name=identity-hub-postgres"
+      # Postgres IH/IssuerService issue credentials noticeably slower than the
+      # in-memory variant, so the 120s subchart default intermittently expires
+      # before every credential reaches ISSUED (partial issuance out of the box).
+      # 240s was verified to give full issuance on a clean postgres install.
+      # Raised only in the postgres profiles; in-memory profiles keep the fast 120s.
+      credentialPollTimeoutSeconds: 240
   dataspace-connector-bundle:
     tractusx-connector:
       dcp:
