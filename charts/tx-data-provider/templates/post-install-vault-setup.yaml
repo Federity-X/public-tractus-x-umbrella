@@ -56,8 +56,23 @@ spec:
             - |
               sleep 10
               {{- range $key, $value := .Values.secrets }}
+              {{- /*
+                   identityHub mode: `edc-wallet-secret` is OWNED by the IdentityHub
+                   seed Job (post-install-identityhub-seed.yaml, block A'), which writes
+                   the REAL random STS clientSecret returned by IdentityHub on the
+                   ParticipantContext-create 201. This hook re-fires on post-upgrade
+                   (the documented re-seed runbook), and re-writing the placeholder here
+                   would clobber that real secret; the seed then gets HTTP 409 and cannot
+                   recover it, leaving Vault with the placeholder -> STS 401 invalid_client
+                   -> catalog 502. So skip this one alias in identityHub mode and let the
+                   seed own it. In stub mode `changeme` IS the secret the stub accepts, so
+                   the write must still happen there. `$` = root ctx (`.` is the map value
+                   inside range).
+              */ -}}
+              {{- if not (and (eq ($.Values.wallet.mode | default "stub") "identityHub") (eq $key "edc-wallet-secret")) }}
               wget --header 'Content-Type: application/json' --header 'X-Vault-Token: {{ $vaultToken }}' \
               --post-data '{"data": {"content": "{{ $value }}"}}' "{{ $vaultUrl }}/v1/secret/data/{{ $key }}"
+              {{- end }}
               {{- end }}
 
               wget --header 'Content-Type: application/json' --header 'X-Vault-Token: {{ $vaultToken }}' \

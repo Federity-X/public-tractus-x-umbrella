@@ -384,6 +384,21 @@ helm upgrade umbrella charts/umbrella --namespace umbrella --reuse-values \
 kubectl -n umbrella logs job/umbrella-post-install-bdrs-setup | tail -5
 ```
 
+> **Why the re-seed no longer breaks connector STS auth.** In `identityHub`
+> mode the connector's STS client secret (`edc-wallet-secret`) is **owned by the
+> seed Job**, not by the `post-install-vault-setup` hook: the seed writes the
+> real random clientSecret that IdentityHub returns on ParticipantContext create
+> (`post-install-identityhub-seed.yaml`, block A'), and `vault-setup` deliberately
+> **skips** that alias in identityHub mode. So the `helm upgrade` above no longer
+> resets `edc-wallet-secret` back to the `changeme` placeholder — the earlier
+> behaviour that left Vault holding the placeholder after a re-seed (the seed
+> then hits HTTP 409 on the already-existing context and cannot recover the
+> secret), producing STS `401 invalid_client` → catalog `502`. For the
+> **in-memory** IH the restarted pod has lost the context, so the re-seed
+> recreates it (HTTP 201) and writes a **fresh** clientSecret into Vault, fully
+> restoring STS auth. (In stub mode `edc-wallet-secret` stays `changeme`, which is
+> exactly what the stub accepts, and `vault-setup` keeps writing it.)
+
 Both **postgres** profiles (`…-postgres.yaml` shared and
 `…-per-participant-postgres.yaml`) avoid step 1 entirely — their ParticipantContexts
 and credentials persist across IdentityHub pod restarts (see *Known limitations* L3).
