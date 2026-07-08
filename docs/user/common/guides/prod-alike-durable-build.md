@@ -12,7 +12,7 @@ by durable storage, so it survives restarts. It is composed as a stack of opt-in
 `-f` overlays on top of the per-participant-postgres profile — add an overlay to
 gain durability, drop it to go back to the fast/ephemeral behaviour.
 
-It targets a **local prod-alike sandbox** (Minikube / kind on a ≈12–36 GB node), not
+It targets a **local prod-alike sandbox** (Minikube / kind on a ≈12–24 GiB Docker VM), not
 real production — see [Caveats](#caveats).
 
 > Deploy mechanics (image prerequisites, ingress hosts, seeding, the DCP smoke test)
