@@ -381,18 +381,21 @@ tx-data-provider:
 dataconsumerTwo:
   enabled: false
 
-# BDRS — re-seed with the two participants' per-host DIDs (same as the in-memory
-# per-participant profile). BDRS itself is still in-memory (Phase 3 replaces it
-# with a postgres chart); its directory is re-seeded on install.
+# BDRS — PERSISTENT (PostgreSQL-backed) variant so the BPN->DID directory survives
+# a BDRS pod / VM restart (Phase 3 durability). Replaces the in-memory bdrs-server
+# with the `bdrs-server` chart, which keeps the directory in its own PostgreSQL and
+# reads its DB creds + management API key from its own Vault. Both variants render
+# as service `bdrs-server` (fullnameOverride), so the connectors' internal
+# `http://bdrs-server:8082/api/directory` and the seed hook's `:8081` stay valid.
 bdrs-server-memory:
+  enabled: false
+
+bdrs-server:
   enabled: true
-  seeding:
-    enabled: true
-    bpnList:
-      - bpn: "BPNL00000003AYRE"
-        did: "did:web:ih-provider.tx.test:BPNL00000003AYRE"
-      - bpn: "BPNL00000003AZQP"
-        did: "did:web:ih-consumer1.tx.test:BPNL00000003AZQP"
+  fullnameOverride: bdrs-server
+  install:
+    postgresql: true
+    vault: true
   server:
     trustedIssuers:
       - did:web:issuer-service.tx.test:BPNL00000003CRHK
@@ -400,4 +403,78 @@ bdrs-server-memory:
       EDC_IAM_DID_WEB_USE_HTTPS: false
     endpoints:
       management:
-        authKey: TEST
+        # BDRS reads the actual key from Vault at this alias (seeded by the dev-vault
+        # postStart below). The umbrella seed hook uses the matching value from
+        # `seeding.managementKey`.
+        authKeyAlias: bdrs-management-api-key
+        authType: tokenbased
+    ingresses:
+      - enabled: true
+        hostname: bdrs-server.tx.test
+        endpoints:
+          - directory
+          - management
+        className: "nginx"
+        tls:
+          enabled: false
+  # Own PostgreSQL, PVC-backed → the directory is durable. Distinct nameOverride
+  # (`{release}-bdrs-postgresql`) avoids colliding with the other postgres instances;
+  # the default jdbcUrl points at `{release}-postgresql`, so override it to match.
+  postgresql:
+    nameOverride: bdrs-postgresql
+    jdbcUrl: "jdbc:postgresql://{{ .Release.Name }}-bdrs-postgresql:5432/bdrs"
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: standard
+    auth:
+      database: "bdrs"
+      username: "bdrs"
+      password: "password"
+  # Own Vault, RENAMED to `bdrs-vault` so it does not collide with the issuer-service
+  # Vault (both otherwise render as `{release}-vault`). Kept in dev mode ON PURPOSE:
+  # unlike the connector Vaults (which hold the dynamically-generated, unrecoverable
+  # STS clientSecret and therefore need Raft persistence), this Vault holds only
+  # STATIC, re-seedable values (DB creds + a fixed management key). The postStart
+  # re-seeds those three aliases on every start, so a Vault restart loses nothing;
+  # the durable state (the directory) lives in PostgreSQL above.
+  vault:
+    fullnameOverride: bdrs-vault
+    # nameOverride ALSO required (not just fullnameOverride): the Vault chart's
+    # default podAntiAffinity selects on `app.kubernetes.io/name: <vault.name>` +
+    # instance. Without a distinct name this vault would carry name=`vault` — the
+    # same label as the issuer-service Vault (`umbrella-vault`) — so on a single
+    # node the issuer Vault's anti-affinity refuses to co-locate with it and stays
+    # Pending. The connector Vaults avoid this the same way (distinct nameOverrides).
+    nameOverride: bdrs-vault
+    hashicorp:
+      url: "http://bdrs-vault:8200"
+      token: "root"
+    server:
+      dev:
+        enabled: true
+        devRootToken: "root"
+      postStart:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          export VAULT_ADDR=http://127.0.0.1:8200
+          export VAULT_TOKEN=root
+          for i in $(seq 1 60); do vault status >/dev/null 2>&1 && break; sleep 1; done
+          # BDRS reads these via the EDC HashiCorp Vault extension (KV v2, `content`
+          # field). Idempotent: re-seeded on every (re)start.
+          vault kv put secret/bdrs-management-api-key content=TEST >/dev/null
+          vault kv put secret/edc.datasource.didentry.user content=bdrs >/dev/null
+          vault kv put secret/edc.datasource.didentry.password content=password >/dev/null
+  # Consumed by the umbrella post-install-bdrs-setup hook (not the subchart): the
+  # directory is seeded via the management API, same as the in-memory variant.
+  seeding:
+    enabled: true
+    url: "http://bdrs-server:8081"
+    managementKey: TEST
+    bpnList:
+      - bpn: "BPNL00000003AYRE"
+        did: "did:web:ih-provider.tx.test:BPNL00000003AYRE"
+      - bpn: "BPNL00000003AZQP"
+        did: "did:web:ih-consumer1.tx.test:BPNL00000003AZQP"

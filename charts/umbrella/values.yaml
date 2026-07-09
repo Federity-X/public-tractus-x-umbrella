@@ -1674,6 +1674,15 @@ bdrs-server-memory:
         tls:
           enabled: false
 
+# Persistent (PostgreSQL-backed) BDRS. Default OFF so the stub / shared / memory
+# profiles never instantiate it (they use bdrs-server-memory above). The postgres
+# profiles flip this on (and bdrs-server-memory off). Explicit `enabled: false`
+# is required: Helm treats a missing condition path as enabled, which would
+# render this alongside the memory variant (both claim fullnameOverride
+# `bdrs-server`) and collide. Full config lives in the postgres profiles.
+bdrs-server:
+  enabled: false
+
 # -----------------------------------------------------------------------------
 # Per-participant IdentityHub instances (#1609 per-participant topology).
 # DISABLED by default — the `shared` topology uses a single IdentityHub from

@@ -402,8 +402,10 @@ kubectl -n umbrella logs job/umbrella-post-install-bdrs-setup | tail -5
 Both **postgres** profiles (`…-postgres.yaml` shared and
 `…-per-participant-postgres.yaml`) avoid step 1 entirely — their ParticipantContexts
 and credentials persist across IdentityHub pod restarts (see *Known limitations* L3).
-The in-memory BDRS still loses its directory on a BDRS restart until Phase 3
-(persistent BDRS) lands.
+BDRS also loses nothing on the **`…-per-participant-postgres.yaml`** profile: it runs
+the PostgreSQL-backed `bdrs-server` (not `bdrs-server-memory`), so the BPN→DID
+directory survives a BDRS pod restart and needs no re-seed. (The shared `…-postgres.yaml`
+profile still uses the in-memory BDRS, which loses its directory on a BDRS restart.)
 
 ## Admin panel (per-participant-plus overlay)
 
@@ -452,14 +454,16 @@ helm install umbrella charts/umbrella \
 ```
 
 This gives each holder its **own** PVC-backed PostgreSQL IdentityHub (Phase 1 — state
-survives IH/DB pod restarts) **and** all three Vaults in prod mode (Phase 2 — the
-connector + IdentityHub + issuer secrets survive a Vault pod restart). Verified live:
-killing all three Vault pods leaves their secrets byte-identical (they re-unseal from
-the PVC via the init `postStart`) and the DCP transfer still passes. Drop the
-`-f values-vault-prod-local.yaml` line to keep the fast dev-mode Vault (secrets then
-reset on a Vault restart). BDRS is still in-memory until Phase 3. See the dedicated
+survives IH/DB pod restarts), all Vaults in prod mode with **Raft integrated storage**
+(Phase 2 — the connector + IdentityHub + issuer secrets survive a Vault pod restart),
+and a **PostgreSQL-backed BDRS** (Phase 3 — the BPN→DID directory survives a BDRS
+restart). Verified live: killing all the Vault pods leaves their secrets byte-identical
+(they re-unseal from the Raft PVC via the init `postStart`), killing the `bdrs-server`
+pod **and** its Postgres leaves the directory intact with no re-seed, and the DCP
+transfer still passes. Drop the `-f values-vault-prod-local.yaml` line to keep the fast
+dev-mode Vault (secrets then reset on a Vault restart). See the dedicated
 [Prod-alike durable build](prod-alike-durable-build.md) guide for the persistence
-boundaries, the fixed-id-token Vault mechanism, and the durability roadmap.
+boundaries and the fixed-id-token Vault mechanism.
 
 The overlay ([`…-per-participant-plus.yaml`](../../../../charts/values-test-data-exchange-identity-hub-per-participant-plus.yaml),
 see its header for full notes) adds:
@@ -487,7 +491,7 @@ deferred live-OIDC step).
 |-----|-----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
 | L1  | The validated flow needs the EDC-0.17.0 stack, not yet on a public release channel.                 | Use the `-local-0.17.0` overlay with built-from-source images (see [Version requirement](#version-requirement)). |
 | L2  | First negotiation after a fresh install can lose a race against the connector's **async** BDRS lookup. | Transient; the smoke test auto-retries and subsequent transfers reuse the warmed BdrsClient cache. Upstream connector timing gap (async BPN resolution vs. terminal transfer state) — to be filed against [tractusx-edc](https://github.com/eclipse-tractusx/tractusx-edc/issues); no umbrella-side fix. |
-| L3  | Memory-lean defaults are **not restart-durable**: Postgres runs `persistence: false`, the IdentityHubs run the `-memory` chart, and Vault runs `server -dev` (in-memory), so a pod / Docker / VM restart wipes DBs + wallet state + secrets. | On a small node, [re-seed](#re-seeding-after-a-pod-restart) or clean-reinstall after a restart. On a **larger VM (≈24 GiB) prefer a durable prod-alike build**: use a **postgres** IH profile (`…-postgres.yaml` or `…-per-participant-postgres.yaml`, Phase 1) so ParticipantContexts + credentials persist, add `values-persistent-local.yaml` for the Postgres PVCs, **and** add `values-vault-prod-local.yaml` (Phase 2) to run all three Vaults in prod mode (PVC file storage + an idempotent init/unseal `postStart` + a fixed-id token) so secrets survive a Vault restart. BDRS persistence is Phase 3. Full recipe: the fx-connector-ui handoff §7. |
+| L3  | Memory-lean defaults are **not restart-durable**: Postgres runs `persistence: false`, the IdentityHubs run the `-memory` chart, and Vault runs `server -dev` (in-memory), so a pod / Docker / VM restart wipes DBs + wallet state + secrets. | On a small node, [re-seed](#re-seeding-after-a-pod-restart) or clean-reinstall after a restart. On a **larger VM (≈24 GiB) prefer a durable prod-alike build**: use a **postgres** IH profile (`…-postgres.yaml` or `…-per-participant-postgres.yaml`, Phase 1) so ParticipantContexts + credentials persist, add `values-persistent-local.yaml` for the Postgres PVCs, **and** add `values-vault-prod-local.yaml` (Phase 2) to run the Vaults in prod mode (Raft integrated storage on a PVC + an idempotent init/unseal `postStart` + a fixed-id token) so secrets survive a Vault restart. On `…-per-participant-postgres.yaml` the BDRS directory is Postgres-backed too (Phase 3), so it also survives a restart. Full recipe: the fx-connector-ui handoff §7. |
 | L4  | Per-participant runs one IdentityHub JVM **per participant**, so it scales with participant count. The shipped profiles (in-memory and postgres) are deliberately **2 participants** (provider + consumer1) to fit a single node — a 4-participant variant over-contends the node (the provider data-backend loses the startup CPU race against the IdentityHub JVMs and crashloops). The postgres per-participant profile additionally runs one bundled PostgreSQL **per** IdentityHub (distinct `nameOverride`s), adding ~2 lightweight DB pods. | Keep per-participant at 2; for more participants, give the cluster proportionally more CPU/memory, or use the shared / persistent-shared profile (single multi-tenant IdentityHub). |
 
 ## Teardown

@@ -28,8 +28,9 @@
 # then IH STS 401) even though the Postgres/IdentityHub SQL state (Phase 1)
 # survives.
 #
-# WHAT IT DOES (per Vault): disable dev mode, back /vault/data with a PVC (file
-# storage), and replace the dev postStart with an init/unseal bootstrap that runs
+# WHAT IT DOES (per Vault): disable dev mode, back /vault/data with a PVC (Raft
+# integrated storage — HashiCorp's recommended production backend), and replace
+# the dev postStart with an init/unseal bootstrap that runs
 # `vault operator init` ONCE (persisting the unseal key + root token on the PVC),
 # unseals on every (re)start, enables the KV-v2 engine at `secret/`, and creates a
 # Vault token with a FIXED, KNOWN id (`txedcvaulttoken`) under a secret-RW policy.
@@ -64,25 +65,35 @@
 
 # ---- shared prod-Vault server config (both connector Vaults are identical) ----
 _vaultProdServer: &vaultProdServer
-  # Prod mode: file storage on the PVC instead of in-memory dev mode.
+  # Prod mode: Raft integrated storage on the PVC instead of in-memory dev mode.
   dev:
     enabled: false
   standalone:
     enabled: true
-    # HCL matches the chart default + raises max_lease_ttl so the fixed token is
-    # not capped to 768h, and disables mlock (containers cannot mlock).
+    # Single-node config (chart standalone mode = replicas 1 + the /vault/data PVC,
+    # which is exactly what Raft needs — no peer join). Raises max_lease_ttl so the
+    # fixed token is not capped to 768h, and disables mlock (containers cannot mlock).
     config: |
       ui = false
       disable_mlock = true
       max_lease_ttl = "8760h"
       default_lease_ttl = "8760h"
+      # Raft REQUIRES api_addr + cluster_addr (Vault refuses to start Raft without
+      # them); a single-node sandbox never forms a peer cluster, so loopback suffices.
+      api_addr = "http://127.0.0.1:8200"
+      cluster_addr = "https://127.0.0.1:8201"
       listener "tcp" {
         tls_disable = 1
         address = "[::]:8200"
         cluster_address = "[::]:8201"
       }
-      storage "file" {
+      # Raft integrated storage (HashiCorp's recommended production backend). A
+      # single-voter cluster self-elects leader on `vault operator init`; the Raft
+      # log + snapshots live under /vault/data on the PVC, so state survives a
+      # Vault pod / VM restart exactly as the file backend did.
+      storage "raft" {
         path = "/vault/data"
+        node_id = "vault-raft-0"
       }
   dataStorage:
     enabled: true

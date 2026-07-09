@@ -17,10 +17,23 @@
   # SPDX-License-Identifier: Apache-2.0
   # #############################################################################
 ---
-{{ if index .Values "bdrs-server-memory" "enabled" }}
-{{ if index .Values "bdrs-server-memory" "seeding" "enabled" }}
-{{- $bdrsUrl := tpl (index .Values "bdrs-server-memory" "seeding" "url") . -}}
-{{- $bdrsKey := index .Values "bdrs-server-memory" "server" "endpoints" "management" "authKey" -}}
+{{- /*
+   Variant-aware: the umbrella ships two mutually-exclusive BDRS charts —
+   `bdrs-server-memory` (in-memory; direct `server.endpoints.management.authKey`)
+   and `bdrs-server` (PostgreSQL-backed durable; management key held in its Vault,
+   so the plaintext value for seeding is carried in `seeding.managementKey`). This
+   hook seeds whichever is enabled, via the same management API. `dig` gives safe
+   access (the default `bdrs-server` block has no `seeding` map).
+*/ -}}
+{{- $mem := index .Values "bdrs-server-memory" -}}
+{{- $pg := index .Values "bdrs-server" -}}
+{{- $memOn := and $mem.enabled (dig "seeding" "enabled" false $mem) -}}
+{{- $pgOn := and $pg.enabled (dig "seeding" "enabled" false $pg) -}}
+{{ if or $memOn $pgOn }}
+{{- $bdrs := ternary $pg $mem $pgOn -}}
+{{- $bdrsUrl := tpl (dig "seeding" "url" "" $bdrs) . -}}
+{{- $bdrsKey := $pgOn | ternary (dig "seeding" "managementKey" "" $pg) (dig "server" "endpoints" "management" "authKey" "" $mem) -}}
+{{- $bpnList := dig "seeding" "bpnList" (list) $bdrs -}}
 {{- $fullName := include "app.fullname" . -}}
 apiVersion: batch/v1
 kind: Job
@@ -66,7 +79,7 @@ spec:
               DIR_EP="$BDRS_URL/api/management/bpn-directory"
               # Expected BPNs — rendered from seeding.bpnList so it stays in
               # lock-step with the POSTs below.
-              EXPECTED_BPNS="{{- range $index, $element := index .Values "bdrs-server-memory" "seeding" "bpnList" }} {{ $element.bpn }}{{- end }}"
+              EXPECTED_BPNS="{{- range $index, $element := $bpnList }} {{ $element.bpn }}{{- end }}"
 
               log() { echo "[bdrs-setup] $*"; }
 
@@ -108,7 +121,7 @@ spec:
                 cat /tmp/resp >&2 || true
                 return 1
               }
-              {{- range $index, $element := index .Values "bdrs-server-memory" "seeding" "bpnList" }}
+              {{- range $index, $element := $bpnList }}
               post_bpn "{{ $element.bpn }}" "{{ $element.did }}"
               {{- end }}
 
@@ -135,5 +148,4 @@ spec:
                 exit 1
               fi
               log "SEED SUMMARY: all expected BPNs present in BDRS directory:$EXPECTED_BPNS"
-{{ end }}
 {{ end }}

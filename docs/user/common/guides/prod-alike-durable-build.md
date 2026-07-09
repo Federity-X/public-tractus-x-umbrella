@@ -40,7 +40,7 @@ helm install umbrella charts/umbrella \
 | `values-test-data-exchange-identity-hub-local-0.17.0.yaml` | In-flight EDC-0.17.0 image pins (built from source; see the companion guide). |
 | `values-test-data-exchange-identity-hub-per-participant-postgres-plus.yaml` | Admin-panel extras: consumer1 IdentityHub admin ingress + CentralIDP (Keycloak). |
 | `values-persistent-local.yaml` | Postgres PVCs (connectors + CentralIDP) + the **submodel backend on PostgreSQL** (its JPA image, Phase 3) + widened startup probes (issuer, BDRS, connector control-plane, submodel backend). |
-| `values-vault-prod-local.yaml` | All three Vaults in **prod mode** (PVC file storage + init/unseal + a fixed-id token) — Phase 2. |
+| `values-vault-prod-local.yaml` | All three connector/issuer Vaults in **prod mode** (Raft integrated storage on a PVC + init/unseal + a fixed-id token) — Phase 2. |
 
 ## Phase 1 — persistent per-participant IdentityHubs
 
@@ -68,7 +68,9 @@ restart would regenerate it and break verification of already-issued credentials
 
 Per Vault the overlay:
 
-- disables `server -dev` and backs `/vault/data` with a **PVC** (file storage);
+- disables `server -dev` and backs `/vault/data` with a **PVC** using **Raft
+  integrated storage** (HashiCorp's recommended production backend; single-voter on
+  the sandbox — a Vault restart re-unseals and replays the Raft log from the PVC);
 - replaces the dev seeding `postStart` with an **idempotent bootstrap**: run
   `vault operator init` **once** (persisting the single unseal key + root token on
   the PVC), **unseal on every (re)start**, enable the KV-v2 engine at `secret/`, and
@@ -87,7 +89,7 @@ known value baked into config at template time — the connector EDC client
 ConfigMap `vaultToken` the seeding Jobs read. No runtime token propagation via k8s
 Secrets is needed.
 
-## Phase 3 — submodel backend (done) + BDRS (remaining)
+## Phase 3 — submodel backend (done) + BDRS (done)
 
 **Submodel backend — done.** `simple-data-backend` now backs its store with Spring
 Data JPA: the embedded H2 default keeps lean profiles in-memory, and this durable
@@ -96,12 +98,16 @@ env), so seeded submodel documents survive a restart. This closes the gap where 
 submodel-backend restart wiped all data while the Postgres-backed DTR kept advertising
 the now-dangling paths (every data pull then `500`'d until a manual re-seed).
 
-**BDRS — remaining.** BDRS (`bdrs-server-memory`) is still in-memory. There is **no
-upstream persistent BDRS chart**, so making it durable means packaging one from the
-upstream `bdrs-server` source. Its BPN→DID directory is **derived config** — re-seeded
-from `bdrs-server-memory.seeding.bpnList` by the `post-install-bdrs-setup` hook on every
-install/upgrade — so it is not primary state; `values-persistent-local.yaml` only widens
-its probe so it stays up (a BDRS **pod** restart still loses the directory until this lands).
+**BDRS — done.** The postgres profiles swap `bdrs-server-memory` for the
+PostgreSQL-backed **`bdrs-server`** chart (both render as service `bdrs-server`, so
+nothing downstream changes). Its BPN→DID directory now lives in a PVC-backed
+PostgreSQL (`{release}-bdrs-postgresql`) and survives a BDRS **pod** restart — the
+`post-install-bdrs-setup` hook only seeds it once on install, not on every restart.
+BDRS reads its DB creds + management API key from its own small Vault (`bdrs-vault`),
+kept in **dev mode on purpose**: unlike the connector Vaults (which hold the
+dynamically-generated, unrecoverable STS clientSecret and therefore need Raft
+persistence), this Vault holds only static, re-seedable values, so an idempotent
+`postStart` re-seeds them on every start and a restart loses nothing.
 
 ## Persistence boundary — what survives what
 
@@ -111,13 +117,15 @@ its probe so it stays up (a BDRS **pod** restart still loses the directory until
 | IdentityHub ParticipantContexts, credentials, keypairs | PostgreSQL + PVC | yes | yes |
 | IssuerService DB | PostgreSQL + PVC | yes | yes |
 | CentralIDP (Keycloak) | PostgreSQL + PVC | yes | yes |
-| Vault secrets (edc-wallet-secret, signing keys, IH + issuer keys) | Vault prod, file storage + PVC | yes (re-unseals from PVC) | yes |
+| Vault secrets (edc-wallet-secret, signing keys, IH + issuer keys) | Vault prod, Raft storage + PVC | yes (re-unseals from PVC) | yes |
 | Submodel backend data | PostgreSQL + PVC (JPA) | yes | yes |
-| **BDRS directory** | in-memory (derived) | **no** (re-seeded on install/upgrade) | **no** |
+| BDRS directory | PostgreSQL + PVC (`bdrs-server`) | yes | yes |
 
-After Phases 1 + 2 + the submodel backend (Phase 3), **all primary state is durable**;
-only the *derived* BDRS directory is still ephemeral, and it is re-provisioned on
-install/upgrade.
+After Phases 1 + 2 + 3, **all state is durable** — the connector/IdentityHub/issuer
+Postgres, the Vault secrets (Raft), the submodel backend, and the BDRS directory all
+survive a pod / Docker / VM restart. The one derived value that is still re-provisioned
+rather than persisted is the BDRS **cache** inside each connector (the cold-BDRS-cache
+first-transfer retry), which is independent of the BDRS directory store.
 
 ## Verification
 
@@ -130,9 +138,12 @@ Verified live on kind (per-participant-postgres + persistence + vault-prod):
   Postgres pods leaves each DB unchanged (participant contexts / credentials /
   keypairs / DIDs counts identical) and the smoke test passes again with **no
   re-seed**.
-- **Vault durability** — deleting all three Vault pods at once leaves every secret
-  byte-identical (they re-unseal from the PVC via `postStart`) and the smoke test
+- **Vault durability** — deleting all Vault pods at once leaves every secret
+  byte-identical (they re-unseal from the Raft PVC via `postStart`) and the smoke test
   passes again.
+- **BDRS durability** — deleting the `bdrs-server` pod **and** its Postgres pod leaves
+  the BPN→DID directory intact (rows unchanged, directory API returns every BPN) with
+  **no re-seed**, and the smoke test passes again.
 
 ## Caveats
 
@@ -149,8 +160,10 @@ Verified live on kind (per-participant-postgres + persistence + vault-prod):
   probes in `values-persistent-local.yaml` (connector control-plane, issuer, BDRS)
   mitigate this. Prefer ≥12 GiB; the first DCP transfer after a fresh install may hit
   the known cold-BDRS-cache retry (the smoke test auto-retries).
-- **Not yet fully "no-in-memory".** BDRS + the submodel backend remain in-memory
-  (Phase 3); both hold re-seeded derived data, not primary state.
+- **Fully "no-in-memory".** With Phase 3 complete, the durable postgres profiles run
+  no in-memory primary store: the submodel backend and BDRS are both PostgreSQL-backed
+  and the Vaults use Raft. (The lean/CI profiles still use the in-memory variants by
+  default — durability is opt-in via the postgres profiles + these overlays.)
 
 ## Related
 

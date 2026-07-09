@@ -104,6 +104,15 @@ dependencies:
     repository: https://eclipse-tractusx.github.io/charts/dev
     version: 0.6.0
     condition: bdrs-server-memory.enabled
+  # Persistent (PostgreSQL-backed) BDRS for the durable profiles. Mutually
+  # exclusive with bdrs-server-memory (both render as `bdrs-server` via
+  # fullnameOverride, so exactly one may be enabled). Default OFF; the postgres
+  # profiles flip bdrs-server-memory.enabled=false + bdrs-server.enabled=true so
+  # the BPN->DID directory survives a BDRS pod/VM restart.
+  - name: bdrs-server
+    repository: https://eclipse-tractusx.github.io/charts/dev
+    version: 0.6.0
+    condition: bdrs-server.enabled
   - name: identity-and-trust-bundle
     repository: file://../identity-and-trust-bundle
     version: 1.2.0
