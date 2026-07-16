@@ -756,6 +756,30 @@ spec:
                 echo "$CRED_LIST" | jq -r '.[]' | while read -r CRED_TYPE; do
                   [ -z "$CRED_TYPE" ] && continue
                   CRED_ID=$(cred_def_id_for "$CRED_TYPE")
+                  # Idempotency guard (step 8): skip re-requesting a credential
+                  # this holder ALREADY holds in state ISSUED (500). The seed runs
+                  # on every post-install AND post-upgrade, and in the shared
+                  # topology it runs once PER connector alias (provider + each
+                  # consumer) — all targeting the same IdentityHub. Because a
+                  # duplicate holderPid does NOT collide on the in-memory store,
+                  # each re-run would otherwise issue ANOTHER copy of the same
+                  # credential. Copies accumulate in the holder's VP until it
+                  # overflows the bdrs-server 8 KB Jetty request-header limit
+                  # (HTTP 431 → BDRS resolution fails → no data transfer). Checking
+                  # first keeps issuance at one credential per type and makes the
+                  # seed truly idempotent across re-runs and sibling seed jobs.
+                  if curl -sS -H "x-api-key: $CUR_IH_KEY" \
+                       "$CUR_IH_IDENTITY/v1alpha/participants/$PART_B64/credentials" 2>/dev/null \
+                     | jq -e --arg t "$CRED_TYPE" \
+                         '.[] | select(
+                            ((.verifiableCredential.credential.type // .credential.type // .type // [])
+                               | if type=="array" then index($t) else . == $t end)
+                            and (.state == 500 or .state == "ISSUED")
+                          )' >/dev/null 2>&1; then
+                    echo "[ih-seed] (D step 8) $CRED_TYPE already ISSUED for $PID — skipping re-request (idempotent)"
+                    echo "OK $PID $CRED_TYPE" >> "$ISSUANCE_LOG"
+                    continue
+                  fi
                   # holderPid is the holder-assigned request id and becomes the
                   # PRIMARY KEY of the IdentityHub holder-credential-request store
                   # (edc_holder_credentialrequest.id). It MUST be unique per

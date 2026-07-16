@@ -92,4 +92,23 @@ helm dependency update "$TX_DATA_PROVIDER_DIR" --skip-refresh
 echo -e "\n📦 Updating dependencies for chart: $UMBRELLA_DIR"
 helm dependency update "$UMBRELLA_DIR" --skip-refresh
 
+# BE-293: the upstream portal chart hardcodes its backend env vars and has no way to expose the
+# IdentityHub onboarding-wallet config (see hack/patches + docs/internal/BE-293-architecture-callback.md).
+# Patch the freshly-fetched chart to add the (opt-in, disabled-by-default) IdentityHub env block.
+# helm dependency update re-fetches the pristine chart each run, so re-applying every time is idempotent.
+PORTAL_PATCH="./hack/patches/portal-2.6.0-be293-identityhub.patch"
+PORTAL_TGZ=$(ls "$UMBRELLA_DIR"/charts/portal-*.tgz 2>/dev/null | head -1)
+if [[ -f "$PORTAL_PATCH" && -n "$PORTAL_TGZ" && -f "$PORTAL_TGZ" ]]; then
+  echo -e "\n🩹 Applying BE-293 IdentityHub patch to $(basename "$PORTAL_TGZ")..."
+  _tmp="$(mktemp -d)"
+  tar xzf "$PORTAL_TGZ" -C "$_tmp"
+  if patch -p1 -d "$_tmp/portal" < "$PORTAL_PATCH" >/dev/null; then
+    helm package "$_tmp/portal" -d "$UMBRELLA_DIR/charts" >/dev/null
+    echo "   portal chart patched + repackaged (IdentityHub wallet config exposed)."
+  else
+    echo "   ⚠️  portal patch did not apply cleanly (chart version bump?) — leaving chart unpatched." >&2
+  fi
+  rm -rf "$_tmp"
+fi
+
 echo -e "\n✅ All charts up to date!"

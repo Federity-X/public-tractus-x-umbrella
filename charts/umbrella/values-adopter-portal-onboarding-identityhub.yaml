@@ -1,0 +1,178 @@
+# #############################################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+# #############################################################################
+---
+# BE-293 — IdentityHub as the onboarding wallet.
+#
+# Layer ON TOP of values-adopter-portal.yaml (and the same onboarding components
+# as values-adopter-portal-onboarding.yaml), but switch the wallet from the stub
+# to IdentityHub + IssuerService and point the Portal backend at the forked
+# BE-293 images. See docs/internal/BE-293-architecture-callback.md.
+#
+#   helm upgrade --install umbrella charts/umbrella \
+#     -f charts/umbrella/values-adopter-portal.yaml \
+#     -f charts/umbrella/values-adopter-portal-onboarding-identityhub.yaml \
+#     --namespace <ns> --create-namespace
+#
+# NOTE: three values must be finalised against the live IssuerService seed and are
+# marked TODO below (bpn/membership credential-definition ids) — the IdentityHub
+# super-user key is PINNED here so the Portal has a stable key.
+
+# ---- wallet: IdentityHub (shared multi-tenant IH hosts all onboarded holders) ----
+wallet:
+  mode: identityHub
+  identityHub:
+    # we set the IH/IssuerService images below to the locally-built (kind-loaded) ones
+    imagesOverridden: true
+  # operatorBpn + identityHub.shared.host/issuerServiceHost inherit from values.yaml
+  # (BPNL00000003CRHK / identity-hub.tx.test / issuer-service.tx.test).
+
+# ---- onboarding components (same as values-adopter-portal-onboarding.yaml) ----
+bpdm:
+  enabled: true
+bdrs-server-memory:
+  enabled: true
+  # bdrs-server-memory:0.6.0 does not expose /api/check/readiness (only /check/liveness); the
+  # chart's readiness probe 404s forever → pod never Ready → Service has no endpoints. Liveness
+  # guards the pod, so disable the broken readiness probe.
+  server:
+    readinessProbe:
+      enabled: false
+selfdescription:
+  enabled: true
+smtp4dev:
+  enabled: true
+bpndiscovery:
+  enabled: true
+  postgresql:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/postgresql
+      tag: "15-debian-11"
+discoveryfinder:
+  enabled: true
+  postgresql:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/postgresql
+      tag: "15-debian-11"
+
+# ssi-credential-issuer is REPLACED by the IssuerService (identity-and-trust-bundle);
+# leaving both on would double-provision the issuer path.
+ssi-credential-issuer:
+  enabled: false
+
+# IdentityHub + IssuerService (forked images carry the portal-credential-callback observer
+# extension). The bundle's image wiring + a PINNED super-user key + the tx.portal.callback.*
+# settings are applied via -f charts/values-test-data-exchange-identity-hub-local-0.17.0.yaml
+# plus the identity-hub-be293 additions below.
+identity-and-trust-bundle:
+  enabled: true
+  # the stub wallet is mutually exclusive with IdentityHub (wallet validator enforces this).
+  ssi-dim-wallet-stub:
+    enabled: false
+  # Shared IH (memory) hosts all onboarded holders; it runs the portal-credential-callback
+  # observer extension (baked into the forked docker-identityhub-memory image).
+  identity-hub:
+    enabled: true
+    identityhub:
+      image:
+        repository: docker-identityhub-memory
+        tag: latest
+        pullPolicy: Never
+      # Arbitrary EDC settings passed as env (the subchart ranges over identityhub.env).
+      # EDC maps env NAME -> config key by lowercasing and turning _ into . or - .
+      env:
+        # PIN the super-user key so the Portal has a STABLE Identity-API key across boots
+        # (otherwise SuperUserSeedExtension generates a new one each boot). Format:
+        # base64(participantId "super-user")="c3VwZXItdXNlcg==" + "." + secret. Applies to a
+        # FRESH IH (the super-user participant is created once at first boot).
+        EDC_IH_API_SUPERUSER_KEY: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
+        # Portal callback (activates the observer extension). Requires the Keycloak technical-user
+        # client below; TOKEN_URL is centralidp's token endpoint.
+        TX_PORTAL_CALLBACK_BASE_URL: "http://portal-backend.tx.test"
+        TX_PORTAL_CALLBACK_TOKEN_URL: "http://centralidp.tx.test/auth/realms/CX-Central/protocol/openid-connect/token"
+        TX_PORTAL_CALLBACK_CLIENT_ID: "sa-cl2-01"
+        TX_PORTAL_CALLBACK_CLIENT_SECRET: "REPLACE_WITH_SA_CLIENT_SECRET"
+  # IssuerService is unchanged by BE-293 (the observer is holder-side) — uses the existing image.
+  issuer-service:
+    enabled: true
+    issuerservice:
+      image:
+        repository: docker-issuerservice
+        tag: latest
+        pullPolicy: Never
+      # The bundle's default wait-for-postgres init container hardcodes the host
+      # `umbrella-issuer-postgresql` (it's rendered via toYaml, not tpl, so it can't use
+      # Release.Name). This deploy's release is `portal-c`, so override the host to match.
+      # (The IssuerService datasource jdbcUrl already templates Release.Name correctly.)
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "[wait-for-postgres] waiting for portal-c-issuer-postgresql:5432 ...";
+              until nc -z portal-c-issuer-postgresql 5432; do
+                echo "[wait-for-postgres] not ready, retry in 2s"; sleep 2;
+              done;
+              echo "[wait-for-postgres] postgres is reachable";
+
+# ---- Portal backend: forked BE-293 images + IdentityHub issuer wiring ----
+portal:
+  enabled: true
+  backend:
+    # deployment-wide onboarding wallet provider (drives the IDENTITY_WALLET entry,
+    # the wallet step type, and the issuer-component selector)
+    walletProvider: "IdentityHub"
+    registration:
+      image:
+        name: "tractusx/portal-registration-service"
+        registrationservicetag: "be293"
+        pullPolicy: "Never"
+    administration:
+      image:
+        name: "tractusx/portal-administration-service"
+        administrationservicetag: "be293"
+        pullPolicy: "Never"
+    portalmigrations:
+      image:
+        name: "tractusx/portal-migrations"
+        portalmigrationstag: "be293"
+        pullPolicy: "Never"
+    processesworker:
+      image:
+        name: "tractusx/portal-processes-worker"
+        processesworkertag: "be293"
+        pullPolicy: "Never"
+      # IdentityHub onboarding-wallet + issuer config (shared topology). Only rendered when
+      # identityHub.enabled=true (portal-chart BE-293 patch).
+      identityHub:
+        enabled: true
+        baseAddress: "http://identity-hub.tx.test/api/identity"
+        didDocumentBaseLocation: "identity-hub.tx.test"
+        credentialServiceBaseAddress: "http://identity-hub.tx.test/api/credentials"
+        issuerDid: "did:web:issuer-service.tx.test:BPNL00000003CRHK"
+        # IssuerService credential-definition ids are fixed by the seed (cred_def_id_for = tx-<type>).
+        bpnCredentialDefinitionId: "tx-bpncredential"
+        membershipCredentialDefinitionId: "tx-membershipcredential"
+        # IdentityHub Identity-API key = the IH super-user key. Live testing showed authKeyAlias
+        # (sup3r$3cr3t) is NOT accepted by the Identity API (401); the participant API requires the
+        # SuperUserSeedExtension key. Pinned above via EDC_IH_API_SUPERUSER_KEY so it's stable.
+        apiKey: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="

@@ -1,0 +1,71 @@
+# #############################################################################
+# SPDX-License-Identifier: Apache-2.0
+# #############################################################################
+# BE-293 Phase 2: add the Portal onboarding to the combined 'umbrella' release.
+# Layer AFTER the data-exchange profiles; the shared branch IdentityHub + IssuerService
+# (already deployed by the connector phase) serve both data-exchange AND onboarding.
+# wallet.mode/topology + IH/issuer images come from the data-exchange profiles.
+---
+centralidp:
+  enabled: true
+sharedidp:
+  enabled: true
+pgadmin4:
+  enabled: true
+bpdm:
+  enabled: true
+selfdescription:
+  enabled: true
+smtp4dev:
+  enabled: true
+bpndiscovery:
+  enabled: true
+  postgresql:
+    image: { registry: docker.io, repository: bitnamilegacy/postgresql, tag: "15-debian-11" }
+discoveryfinder:
+  enabled: true
+  postgresql:
+    image: { registry: docker.io, repository: bitnamilegacy/postgresql, tag: "15-debian-11" }
+# the shared IssuerService replaces ssi-credential-issuer for onboarding
+ssi-credential-issuer:
+  enabled: false
+portal:
+  enabled: true
+  backend:
+    walletProvider: "IdentityHub"
+    # smtp4dev is the in-cluster SMTP catcher (service smtp4dev:25). The chart default
+    # (smtp.example.org / the umbrella's smtp.tx.test = HTTP ingress, no SMTP listener)
+    # makes every MAILING process hang ~75s on connect-timeout and starve the
+    # processes-worker before it reaches the onboarding checklist. Point the mailers at
+    # smtp4dev:25 so mail completes (or fails) fast.
+    mailing:
+      host: "smtp4dev"
+      port: 25
+    provisioning:
+      sharedRealm:
+        smtpServer:
+          host: "smtp4dev"
+          port: 25
+          starttls: false
+          auth: false
+    registration:
+      image: { name: "tractusx/portal-registration-service", registrationservicetag: "be293", pullPolicy: "Never" }
+    administration:
+      image: { name: "tractusx/portal-administration-service", administrationservicetag: "be293", pullPolicy: "Never" }
+    portalmigrations:
+      image: { name: "tractusx/portal-migrations", portalmigrationstag: "be293", pullPolicy: "Never" }
+    processesworker:
+      image: { name: "tractusx/portal-processes-worker", processesworkertag: "be293", pullPolicy: "Never" }
+      identityHub:
+        enabled: true
+        # Participant-management (identity/admin) API is served on the ADMIN ingress host,
+        # NOT the public identity-hub.tx.test (which 405s on POST /participants). The
+        # credential-service + DID location below stay on the public host on purpose.
+        baseAddress: "http://identity-hub-admin.tx.test/api/identity"
+        didDocumentBaseLocation: "identity-hub.tx.test"
+        credentialServiceBaseAddress: "http://identity-hub.tx.test/api/credentials"
+        issuerDid: "did:web:issuer-service.tx.test:BPNL00000003CRHK"
+        bpnCredentialDefinitionId: "tx-bpncredential"
+        membershipCredentialDefinitionId: "tx-membershipcredential"
+        # Pinned super-user key (matches EDC_IH_API_SUPERUSER_KEY in values-callback-activation.yaml).
+        apiKey: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="

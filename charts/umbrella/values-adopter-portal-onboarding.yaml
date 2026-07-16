@@ -1,0 +1,67 @@
+# #############################################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+# #############################################################################
+---
+# Phase B - full stub-wallet company-onboarding stack.
+# Layer this ON TOP of values-adopter-portal.yaml. It turns on exactly the
+# onboarding components listed in docs/user/common/guides/portal-usage.md
+# (BPDM, stub wallet, BDRS, ssi-credential-issuer, self-description,
+# discovery finder, BPN discovery, mail catcher). wallet.mode stays "stub"
+# (the umbrella default) so the identityHub mutual-exclusion guard passes.
+
+wallet:
+  mode: stub
+
+bpdm:
+  enabled: true
+
+bdrs-server-memory:
+  enabled: true
+
+selfdescription:
+  enabled: true
+
+# Mail catcher (invitation emails) - portal backend already points at smtp.tx.test
+smtp4dev:
+  enabled: true
+
+bpndiscovery:
+  enabled: true
+  # Bitnami removed the `bitnami/postgresql` Docker Hub images (relocated to
+  # `bitnamilegacy/*` in 2025); the chart default tag no longer resolves. Pin the
+  # relocated image — the same one the rest of the umbrella already uses.
+  postgresql:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/postgresql
+      tag: "15-debian-11"
+
+discoveryfinder:
+  enabled: true
+  postgresql:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/postgresql
+      tag: "15-debian-11"
+
+ssi-credential-issuer:
+  enabled: true
+
+# Stub Holder Wallet (ssi-dim-wallet-stub) via the identity-and-trust bundle in stub mode
+identity-and-trust-bundle:
+  enabled: true

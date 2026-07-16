@@ -32,15 +32,20 @@
 # block mapping every umbrella ingress host to the ingress-nginx-controller
 # ClusterIP, then restarts CoreDNS to pick up the change.
 #
-# SCOPE: gated on `wallet.mode == identityHub`. The default data-exchange
-# profile (ssi-dim-wallet-stub) does not need this because wallet traffic
+# SCOPE: runs when `wallet.mode == identityHub` OR `bpdm.enabled` (the
+# onboarding/Portal profile). The IdentityHub needs it for did:web resolution;
+# BPDM needs it because its services call each other in-cluster via their
+# ingress URLs (e.g. the pool's dependency check hits
+# `http://business-partners.tx.test/orchestrator`) and fail with
+# `UnknownHostException` / "Orchestrator Service: Down" without it. The lean
+# stub data-exchange profile (no BPDM) still skips it — its wallet traffic
 # stays host-side via ingress. Follow-up (see docs/common/concept/
 # 1609-local-test-findings.md) will explore a proper CoreDNS overlay for
 # the kind cluster so this Job can be deprecated.
 #
 # Refs: sig-release #1609, umbrella findings doc B1.
 ###############################################################
-{{- if eq (.Values.wallet).mode "identityHub" }}
+{{- if or (eq (.Values.wallet).mode "identityHub") (.Values.bpdm).enabled }}
 ---
 apiVersion: v1
 kind: ServiceAccount

@@ -1,0 +1,61 @@
+###############################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+###############################################################
+#
+# BE-293 CALLBACK ACTIVATION (layer on the durable Postgres IdentityHub).
+#
+# 1. Pins the IdentityHub super-user key (edc.ih.api.superuser.key). The
+#    SuperUserSeedExtension only logs the key on FIRST creation and skips a
+#    pre-existing super-user, so without a pin the key is unrecoverable after the
+#    creating pod's logs rotate. Pinning gives a STABLE key that survives IH
+#    restarts — required so both the seed (scrapes it from the log) and the Portal
+#    (IdentityHub:ApiKey) keep working across restarts. Format:
+#    base64(participantId) "." base64(secret).
+#    NOTE: pinning only takes effect when the super-user is (re)created, so the IH
+#    Postgres DB must be fresh/wiped when this is first applied.
+#
+# 2. Activates the portal-credential-callback observer extension by configuring
+#    tx.portal.callback.* on the IH runtime. On a holder credential request
+#    reaching ISSUED/ERROR the extension gets a centralidp client-credentials token
+#    and POSTs the Portal's issuer callback
+#    (/api/administration/registration/issuer/{bpn|membership}credential), which
+#    advances the onboarding AWAIT_*_CREDENTIAL_RESPONSE checklist step.
+#    client-id = sa-cl24-01: the ONLY base service account assigned BOTH
+#    Cl2-CX-Portal client roles update_application_bpn_credential +
+#    update_application_membership_credential (verified in the CX-Central realm
+#    seed). Secret = the umbrella default "changeme".
+###############################################################
+
+identity-and-trust-bundle:
+  identity-hub-postgres:
+    identityhub:
+      env:
+        # (1) stable, known super-user key (see header)
+        EDC_IH_API_SUPERUSER_KEY: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
+        # (2) activate the portal-credential-callback observer extension
+        TX_PORTAL_CALLBACK_BASE_URL: "http://portal-backend.tx.test"
+        TX_PORTAL_CALLBACK_TOKEN_URL: "http://centralidp.tx.test/auth/realms/CX-Central/protocol/openid-connect/token"
+        TX_PORTAL_CALLBACK_CLIENT_ID: "sa-cl24-01"
+        TX_PORTAL_CALLBACK_CLIENT_SECRET: "changeme"
+
+# Portal worker uses the SAME pinned super-user key to drive IdentityHub wallet ops.
+portal:
+  backend:
+    processesworker:
+      identityHub:
+        apiKey: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
