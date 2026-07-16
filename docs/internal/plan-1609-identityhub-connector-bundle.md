@@ -468,14 +468,14 @@ Branch: `feature/1609-identityhub-connector-bundle` (re-scoped from the original
 
 Applied and `helm lint`/`helm template`-verified:
 
-- [x] `wallet:` indirection block at the umbrella level — `stub` | `identityHub`. [charts/umbrella/values.yaml](charts/umbrella/values.yaml)
-- [x] Mutual-exclusion validator that fails helm render if both wallets enabled. [charts/umbrella/templates/\_wallet-validate.tpl](charts/umbrella/templates/_wallet-validate.tpl), [charts/umbrella/templates/configmap-wallet-mode.yaml](charts/umbrella/templates/configmap-wallet-mode.yaml)
-- [x] `tractusx-identityhub-memory v0.2.0` + `tractusx-issuerservice-memory v0.2.0` pinned as optional deps of `identity-and-trust-bundle`. [charts/identity-and-trust-bundle/Chart.yaml](charts/identity-and-trust-bundle/Chart.yaml)
-- [x] Default values for both charts that match real v0.2.0 schema (endpoints 8080–8087, two ingresses per IH for presentation + admin planes). [charts/identity-and-trust-bundle/values.yaml](charts/identity-and-trust-bundle/values.yaml)
-- [x] Shared-topology profile file. [charts/values-test-data-exchange-identity-hub.yaml](charts/values-test-data-exchange-identity-hub.yaml)
-- [x] Per-participant profile (documented target; wiring still missing). [charts/values-test-data-exchange-identity-hub-per-participant.yaml](charts/values-test-data-exchange-identity-hub-per-participant.yaml)
-- [x] Post-install seeding hook (`wallet.mode == identityHub`-gated) with real Identity API + Issuer Admin API calls, idempotent (409 → OK), schema-drift-tolerant. [charts/tx-data-provider/templates/post-install-identityhub-seed.yaml](charts/tx-data-provider/templates/post-install-identityhub-seed.yaml)
-- [x] Vault pre-seed guarded by `wallet.mode`, writes `identityhub-api-key` + `operator-sts-secret-alias`. [charts/tx-data-provider/templates/post-install-vault-setup.yaml](charts/tx-data-provider/templates/post-install-vault-setup.yaml)
+- [x] `wallet:` indirection block at the umbrella level — `stub` | `identityHub`. [charts/umbrella/values.yaml](../../charts/umbrella/values.yaml)
+- [x] Mutual-exclusion validator that fails helm render if both wallets enabled. [charts/umbrella/templates/\_wallet-validate.tpl](../../charts/umbrella/templates/_wallet-validate.tpl), [charts/umbrella/templates/configmap-wallet-mode.yaml](../../charts/umbrella/templates/configmap-wallet-mode.yaml)
+- [x] `tractusx-identityhub-memory v0.2.0` + `tractusx-issuerservice-memory v0.2.0` pinned as optional deps of `identity-and-trust-bundle`. [charts/identity-and-trust-bundle/Chart.yaml](../../charts/identity-and-trust-bundle/Chart.yaml)
+- [x] Default values for both charts that match real v0.2.0 schema (endpoints 8080–8087, two ingresses per IH for presentation + admin planes). [charts/identity-and-trust-bundle/values.yaml](../../charts/identity-and-trust-bundle/values.yaml)
+- [x] Shared-topology profile file. [charts/values-test-data-exchange-identity-hub.yaml](../../charts/values-test-data-exchange-identity-hub.yaml)
+- [x] Per-participant profile (documented target; wiring still missing). [charts/values-test-data-exchange-identity-hub-per-participant.yaml](../../charts/values-test-data-exchange-identity-hub-per-participant.yaml)
+- [x] Post-install seeding hook (`wallet.mode == identityHub`-gated) with real Identity API + Issuer Admin API calls, idempotent (409 → OK), schema-drift-tolerant. [charts/tx-data-provider/templates/post-install-identityhub-seed.yaml](../../charts/tx-data-provider/templates/post-install-identityhub-seed.yaml)
+- [x] Vault pre-seed guarded by `wallet.mode`, writes `identityhub-api-key` + `operator-sts-secret-alias`. [charts/tx-data-provider/templates/post-install-vault-setup.yaml](../../charts/tx-data-provider/templates/post-install-vault-setup.yaml)
 - [x] `ECOSYSTEM-GUIDE.md` section 7.y "Choosing a Wallet Implementation" documents the trade-off.
 
 **Verification evidence:**
@@ -586,7 +586,7 @@ Create `docs/user/common/guides/data-exchange-identity-hub.md`:
 see **section 0.0** for the verified finding (no component upgrade required; this is
 pure umbrella Helm composition) and the concrete 6-step wiring approach. The
 per-participant profile
-[charts/values-test-data-exchange-identity-hub-per-participant.yaml](charts/values-test-data-exchange-identity-hub-per-participant.yaml)
+[charts/values-test-data-exchange-identity-hub-per-participant.yaml](../../charts/values-test-data-exchange-identity-hub-per-participant.yaml)
 stays in-repo as the target end-state; its header comment already documents
 the required dependency wiring. Whether it ships in the first #1609 PR or a
 follow-up is a sequencing call (section 9 open question 2), **not** a technical
@@ -629,7 +629,7 @@ ${MINIKUBE_IP}  issuer-service-admin.tx.test
 EOF
 ```
 
-Plus all the usual umbrella hosts from [docs/user/mac/without-docker-desktop.md](docs/user/mac/without-docker-desktop.md).
+Plus all the usual umbrella hosts from [docs/user/mac/without-docker-desktop.md](../../docs/user/mac/without-docker-desktop.md).
 
 ### 6.2 Install the umbrella with Identity Hub
 
@@ -680,7 +680,7 @@ consumers), 3 credentials per participant in state `ISSUED`.
 
 ### 6.4 Test Case 1: execute a data exchange
 
-Follow existing guide: [docs/user/common/guides/data-exchange.md](docs/user/common/guides/data-exchange.md).
+Follow existing guide: [docs/user/common/guides/data-exchange.md](../../docs/user/common/guides/data-exchange.md).
 
 ```bash
 # Provider publishes an asset (as per existing guide)
