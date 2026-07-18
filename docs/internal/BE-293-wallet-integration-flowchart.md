@@ -33,9 +33,9 @@ flowchart TD
 
     W4 --> V1["VALIDATE_DID_DOCUMENT (P worker)"]
     V1 --> V2{"Resolve did:web via<br/>UNIVERSALRESOLVERADDRESS"}
-    V2 -->|"prod / in-cluster resolver: resolvable"| R1["REQUEST_*_CREDENTIAL"]
-    V2 -->|"local sandbox: dev.uniresolver.io<br/>cannot reach *.tx.test → 404 (env limit)"| VB["step FAILS<br/>DEMO BRIDGE: mark DONE +<br/>drive credential requests directly (U)"]
-    VB --> R1
+    V2 -->|"in-cluster didweb-resolver shim (U):<br/>fetch IH did.json → resolver envelope → 200"| R1["REQUEST_*_CREDENTIAL"]
+    V2 -->|"prod: real Universal Resolver over public HTTPS did:web"| R1
+    V2 -.->|"only if DID unpublished (204/notFound) —<br/>worker create/activate race, open item"| VX["step FAILS<br/>(publish the DID, then re-run)"]
 
     subgraph CRED["Credential request + DCP issuance"]
         R1["REQUEST_BPN_CREDENTIAL + REQUEST_MEMBERSHIP_CREDENTIAL (P)<br/>POST IH /participants/{ctx}/credentials/request {issuerDid,type}"]
@@ -59,7 +59,7 @@ flowchart TD
     classDef ext fill:#e8f0ff,stroke:#3b6;
     classDef warn fill:#fff3e0,stroke:#e69138;
     class C1,C2,C3 ext;
-    class V2,VB warn;
+    class VX warn;
 ```
 
 ## 2. Issuance → callback core (sequence — the heart of BE-293)
@@ -91,8 +91,11 @@ sequenceDiagram
 - **Durability (D2):** the IdentityHub is Postgres-backed, so the wallet + credentials survive an IH pod restart
   (a Portal-onboarded participant cannot be "re-seeded"). Full Docker-restart durability also needs a persistent
   `umbrella-vault` (signing keys).
-- **The one branch that isn't organic in the local sandbox (D11):** `VALIDATE_DID_DOCUMENT` uses the PUBLIC
-  Universal Resolver, which cannot resolve a local `did:web:*.tx.test`. The orange path is the demo bridge; the
-  proper fix is an in-cluster Universal Resolver (then the orange path disappears and the flow is fully automatic).
+- **`VALIDATE_DID_DOCUMENT` (D11) — now resolved in-cluster:** a public Universal Resolver cannot reach a local
+  `did:web:*.tx.test`, so this step used to be a demo DB bridge. It is now served by the in-cluster
+  `didweb-resolver` shim (chart template `templates/didweb-resolver.yaml`) — the Portal resolves `did:web:*.tx.test` organically, no
+  bridge. In production you drop the shim and point at a real Universal Resolver over public-HTTPS did:web (see D11).
+  The only remaining dotted branch is when a participant's DID was never **published** (worker create/activate race);
+  publish it and the step passes.
 - **The observer needs no Portal change:** it posts the Portal's pre-existing issuer callback endpoint. See
   `BE-293-architecture-callback.md` (ADR) and `BE-293-cross-repo-changes-and-decisions.md` (D1–D11).

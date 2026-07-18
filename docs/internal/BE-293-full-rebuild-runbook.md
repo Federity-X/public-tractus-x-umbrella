@@ -12,8 +12,9 @@ so a Portal onboarding advances its credential checklist steps when IdentityHub 
 BPN/Membership credentials.
 
 > Status: verified end-to-end on 2026-07-15 (kind cluster `umbrella-1609`, macOS/arm64, Docker VM 31 GiB).
-> This is a SANDBOX/DEMO runbook — it rides in-flight forked images and (for the onboarding demo) a few
-> documented DB bridges around a local-sandbox DID-resolution limitation (see §7). Not production.
+> This is a SANDBOX/DEMO runbook — it rides in-flight forked images. The onboarding DID-resolution step is now
+> served by an in-cluster did:web resolver shim (§7.1), replacing the earlier DB bridges. Not production
+> (drop the shim for a real Universal Resolver — see §7.1 / decisions-record D11).
 
 ---
 
@@ -144,7 +145,12 @@ PVC + widens the control-plane probes; `values-callback-activation.yaml` **pins*
 
 **Verify:**
 ```bash
-kubectl get pods -n umbrella | grep -vE 'Running|Completed'          # only transient startup races expected
+kubectl get pods -n umbrella | grep -vE 'Running|Completed'          # see F1 note below
+# F1 (fresh-install boot race): a connector control-/data-plane may sit in CrashLoopBackOff — it booted
+# before its PVC-backed Postgres was Ready, the EDC runtime EXITS on DB-refused (probe-widening can't help),
+# and the ~5 min backoff cap stalls self-recovery. Once the `*-db` pods are Running, reset the stuck planes:
+#   kubectl delete pod -n umbrella <umbrella-dataprovider-edc-controlplane-... / -dataplane-...>
+# They boot cleanly against the now-ready DB. Only then run the smoke test.
 INGRESS_IP=127.0.0.1 ./hack/dcp-data-transfer-smoke.sh               # => FULL DCP DATA TRANSFER SUCCEEDED
 # credentials seeded (PLAIN participantContextId in the URL, not base64; port 8082 on the postgres IH):
 #   GET http://identity-hub-admin.tx.test/api/identity/v1alpha/participants/provider-bpnl00000003ayre/credentials
@@ -171,13 +177,16 @@ The connector Postgres PVCs persist across this upgrade, so the EDC schema is NO
 upgrade with `relation "edc_contract_negotiation" does not exist`, the connector DBs were recreated empty —
 `kubectl rollout restart deploy -l ...edc-controlplane/-dataplane` to re-provision the schema.
 
-**Verify the extension is ACTIVE and delivering:**
+**Verify the extension is ACTIVE:**
 ```bash
 IH=$(kubectl get po -n umbrella -o name | grep identity-hub-postgres- | grep -v postgresql | head -1)
-kubectl logs -n umbrella $IH | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E 'started \(scanning|Delivered Portal callback'
+kubectl logs -n umbrella $IH | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E 'started \(scanning|Delivered Portal callback|scan failed'
 # => "Portal Credential Callback Extension started (scanning every 10s)"
-# => "Delivered Portal callback: bpn=... type=MembershipCredential status=SUCCESSFUL" for the seeded holders
-#    (Portal returns 404 for seeded BPNs — correct: they have no SUBMITTED onboarding application.)
+# => NO "Delivered Portal callback" lines and NO "scan failed" here: the seeded holders use role-prefixed
+#    participant contexts (e.g. provider-bpnl00000003ayre), which the extension deliberately SKIPS (they are
+#    not Portal-onboarded BPN wallets — they have no onboarding application). Real deliveries appear only for a
+#    browser-onboarded BPN in §7. (This is the ONBOARDED_BPN guard added in the extension; before it, the seeded
+#    holders were POSTed and 404'd — that noise is now gone.)
 ```
 
 ## 7. Onboarding demo (real participant, browser-driven) + the callback closing the loop
@@ -189,8 +198,10 @@ cred-defs `tx-bpncredential` / `tx-membershipcredential`, callback client **`sa-
 BOTH `update_application_bpn_credential` + `update_application_membership_credential` Cl2-CX-Portal roles),
 secret `changeme`.
 
-1. **Invite** a company (operator): reset cx-operator pw (master admin `admin/adminconsolepwcentralidp` →
-   reset `cx-operator` in CX-Central to `Testpass1!`), operator token (`Cl2-CX-Portal` password grant), then
+1. **Invite** a company (operator): reset the operator pw (master admin `admin/adminconsolepwcentralidp`).
+   NOTE (F2): the operator's **username is a UUID**, not `cx-operator` — find it by email `cx-operator@tx.org`
+   (`GET /admin/realms/CX-Central/users?username=ac1cf001-7fbc-1f2f-817f-bce058020006` on the reference seed).
+   Reset that user in CX-Central to `Testpass1!`, get an operator token (`Cl2-CX-Portal` password grant, username=the UUID), then
    `POST portal-backend.tx.test/api/administration/invitation {organisationName, firstName, lastName, email}`
    → `{applicationId, companyId}`. The processes-worker (cron, every 5 min) creates the `idp1` shared realm +
    the invited user; set that user's password via the **sharedidp** admin (`admin/adminconsolepwsharedidp`,
@@ -199,24 +210,50 @@ secret `changeme`.
    name = the `idp1` broker), log in as the invited user, complete the form, **Submit** → application SUBMITTED.
 3. **Approve** (operator): `POST .../registration/applications/{appId}/approve` then assign a BPN
    `POST .../registration/application/{appId}/{BPN}/bpn` (e.g. `BPNL00000042ONBD`). REGISTRATION_VERIFICATION +
-   BUSINESS_PARTNER_NUMBER → DONE. The worker then creates+activates the wallet on the IH (`POST identity-hub-admin.tx.test/api/identity/v1alpha/participants` → 200, `/state` → 204).
-4. **Credentials → callback**: the worker requests BPN + Membership credentials → IssuerService issues → the
-   holder pulls (state 500) → the `portal-credential-callback` extension posts the Portal issuer callback →
-   `BPNL_CREDENTIAL` + `MEMBERSHIP_CREDENTIAL` checklist steps → DONE.
+   BUSINESS_PARTNER_NUMBER → DONE. The worker then creates+activates the wallet on the IH (`POST identity-hub-admin.tx.test/api/identity/v1alpha/participants` → 200, `/state` → 204), which publishes the participant's `did:web`
+   AND sets the company's `DidDocumentLocation` (**F5**). `VALIDATE_DID_DOCUMENT` resolves that `did:web` through the
+   in-cluster `didweb-resolver` shim (§7.1) → DONE; `TRANSMIT_BPN_DID` registers the BPN→DID in BDRS (**F3**: the
+   Portal's `bpnDidResolver` must point at `bdrs-server:8081` with key `TEST`) → DONE.
+4. **Credentials → callback**: before requesting each credential the worker **registers the holder with the
+   IssuerService** (**F6**: `POST issuer-service-admin.tx.test/api/admin/v1alpha/participants/{issuerCtx}/holders`,
+   PLAIN ctx not base64), otherwise the holder's DCP request is rejected `401 Participant not found`. Then it requests
+   BPN + Membership credentials → IssuerService issues → the holder pulls (ISSUED) → the `portal-credential-callback`
+   extension posts the Portal issuer callback (status **SUCCESSFUL**) → `BPNL_CREDENTIAL` + `MEMBERSHIP_CREDENTIAL` → DONE.
 
-### ⚠ Local-sandbox limitation + the bridges it forces (§7 step 3–4)
-`VALIDATE_DID_DOCUMENT` resolves the new `did:web:identity-hub.tx.test:...` via the PUBLIC Universal Resolver
-`dev.uniresolver.io` (`APPLICATIONCHECKLIST__DIM__UNIVERSALRESOLVERADDRESS`), which **cannot reach a local
-`.tx.test` did:web** → 404 → the step FAILS (the wallet + DID are functionally created on the IH). No local
-universal resolver ships in the umbrella, so the Portal's own credential-request chain stalls there. To
-demonstrate the callback past it, bridge in the Portal DB (db `postgres`, user `portal`, pw secret
-`portal-postgres/portal-password`): mark `VALIDATE_DID_DOCUMENT` DONE, set the two credential checklist entries
-IN_PROGRESS, insert `AWAIT_{BPN,MEMBERSHIP}_CREDENTIAL_RESPONSE` process steps, and drive the credential
-requests directly on the IH (IS holder registration `POST issuer-service-admin.tx.test/api/admin/v1alpha/participants/issuer-bpnl00000003crhk/holders`
-+ `POST identity-hub-admin.tx.test/api/identity/v1alpha/participants/<ctx>/credentials/request`). The **callback
-extension itself needs no bridge** — the bridges only substitute for the DID-validation-blocked Portal steps.
-**Proper fix (removes all bridges):** run an in-cluster Universal Resolver and point `UNIVERSALRESOLVERADDRESS`
-at it (or relax that validation for the sandbox) so `did:web:*.tx.test` resolves.
+> **Verified 2026-07-18:** with F3+F5+F6 applied, a clean fresh onboarding ran §7 steps 3–4 **automatically, no
+> bridges/nudges** — both credentials ISSUED, both callbacks SUCCESSFUL, checklist advanced to CLEARING_HOUSE. See
+> the F1–F6 findings table in `BE-293-cross-repo-changes-and-decisions.md`.
+
+### 7.1 · `VALIDATE_DID_DOCUMENT` via the in-cluster did:web resolver (no bridge)
+
+A public Universal Resolver (`dev.uniresolver.io`) **cannot reach a local `did:web:*.tx.test`** (the hosts resolve
+only inside the cluster and the IH serves `did.json` Host-header-dependently), so this step used to fail and force a
+Portal-DB bridge. It is now served by the in-cluster shim, which ships **as part of the umbrella chart**
+(`templates/didweb-resolver.yaml`, gated by `didwebResolver.enabled`). The BE-293 onboarding overlays
+(`values-combined-portal-additions.yaml`, `values-adopter-portal-onboarding-identityhub.yaml`) set
+`didwebResolver.enabled: true`, so a normal `helm install`/`upgrade` with those overlays deploys it automatically —
+no separate `kubectl apply`. Confirm it is up:
+
+```bash
+kubectl rollout status -n umbrella deploy/didweb-resolver --timeout=180s
+```
+
+The worker already points at it (`portal.backend.processesworker.dim.universalResolverAddress: http://didweb-resolver:8080/`
+→ `APPLICATIONCHECKLIST__DIM__UNIVERSALRESOLVERADDRESS`). Verify it resolves a **published** did:web:
+
+```bash
+kubectl run rtest -n umbrella --image=curlimages/curl:latest --restart=Never --rm -i --command -- \
+  curl -sS "http://didweb-resolver:8080/1.0/identifiers/did:web:identity-hub.tx.test:BPNL00000003AYRE"
+# -> {"didDocument":{...full doc...},"didResolutionMetadata":{"contentType":"application/did+json"},...}  (VALIDATE passes)
+```
+
+**Residual open item:** the resolver only resolves a did:web the IH actually **published**. A cleanly worker-created
+participant publishes its DID on activation (the seeded provider proves it); one whose create/activate raced returns
+`{"error":"notFound"}` (its `/{BPN}/did.json` = 204). If VALIDATE fails for a freshly onboarded BPN, its DID is
+unpublished — that is a wallet-creation matter (portal-backend `IdentityHubService` / IH publish-on-activate), **not**
+the resolver. **Production:** did:web needs no shim — publish DIDs on a public HTTPS host and point
+`universalResolverAddress` at a real Universal Resolver instead (see decisions-record D11). The **callback extension
+needs no bridge** in either case.
 
 ## 8. Fixes baked into this deploy (what a plain upstream deploy is missing)
 
@@ -230,6 +267,10 @@ at it (or relax that validation for the sandbox) so `did:web:*.tx.test` resolves
 - **Seed idempotency guard** (`charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`): skip
   re-requesting a credential already ISSUED (prevents duplicate VCs on re-runs).
 - **Test-data seeding BPN fix** (`configmap-portal-testdata-seeding.yaml`): plain BPN, not the connector DID.
+- **In-cluster did:web resolver shim** (chart template `templates/didweb-resolver.yaml`, gated by
+  `didwebResolver.enabled`, + `dim.universalResolverAddress` in
+  `values-combined-portal-additions.yaml`): resolves `did:web:*.tx.test` for `VALIDATE_DID_DOCUMENT` so onboarding
+  needs no DID-resolution DB bridge (§7.1). Sandbox-only — drop for a real Universal Resolver in production.
 
 ## 9. Gotchas quick-reference
 
@@ -261,7 +302,12 @@ Ran this runbook from a full teardown (deleted the kind cluster) on a clean box.
 - §6 Phase 2: `deployed`; connector PVCs persisted so **DCP stayed GREEN** across the upgrade (no schema wipe);
   extension logs `started (scanning every 10s)` and **delivers callbacks**; migration Job `Complete`; BPDM 1/1.
 - §7 onboarding: browser-driven (requires the operator); the callback + checklist-advance path was proven in
-  the prior session (204 → BPNL_CREDENTIAL/MEMBERSHIP_CREDENTIAL DONE) and depends on the §7 DID-resolver bridge.
+  the prior session (204 → BPNL_CREDENTIAL/MEMBERSHIP_CREDENTIAL DONE).
+- §7.1 DID resolution: the in-cluster `didweb-resolver` shim is deployed and **verified** — it returns the
+  provider's published did:web (HTTP 200 + full `didDocument`, no error → VALIDATE passes) and `notFound` for an
+  unpublished one; the worker's `APPLICATIONCHECKLIST__DIM__UNIVERSALRESOLVERADDRESS` points at it. This removes
+  the DB bridge for DID resolution. Remaining: a freshly onboarded participant's did:web must be *published* by
+  the worker's create/activate for the resolver to return it (see §7.1 residual note).
 
-Conclusion: the documented §2–§6 process reproduces the durable stack exactly; §7 is accurate but needs the
-browser step + the documented bridge until a local Universal Resolver is added.
+Conclusion: the documented §2–§6 process reproduces the durable stack exactly; §7 is accurate and the DID-resolution
+step is now organic via the §7.1 resolver shim (browser step still required for the human registration).

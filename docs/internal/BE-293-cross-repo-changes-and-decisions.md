@@ -63,6 +63,9 @@ the OSS umbrella stack.
   `IDENTITYHUB__BASEADDRESS`→admin host; mailer→`smtp4dev:25`; Portal `identityHub.apiKey`=pinned key.
 - `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml` — seed idempotency guard.
 - `charts/umbrella/templates/configmap-portal-testdata-seeding.yaml` — test-data BPN fix (plain BPN, not the DID).
+- `charts/umbrella/templates/didweb-resolver.yaml` **(new)** + `didwebResolver.enabled` value — in-cluster did:web
+  Universal-Resolver shim (value-gated chart template); the worker's `dim.universalResolverAddress` (in the overlays)
+  points at it so `VALIDATE_DID_DOCUMENT` resolves `did:web:*.tx.test` with no bridge (D11).
 - `hack/helm-dependencies.bash` + `hack/patches/` — repackage + BE-293 portal chart patch.
 - `docs/internal/BE-293-*.md` — this record + the runbook + the callback ADR + subtasks.
 
@@ -135,13 +138,44 @@ but is a manual step and loses any real data; persistence is the durable fix.
 independent `-f` overlays that can be added or dropped. **Alternative rejected:** bake everything into one profile —
 harder to review, and couples unrelated concerns (durability vs portal vs callback).
 
-### D11 · Onboarding demo uses **DB bridges** around the DID-validation step (sandbox-only)
-**Why:** `VALIDATE_DID_DOCUMENT` resolves the new `did:web:*.tx.test` via the PUBLIC `dev.uniresolver.io`, which
-cannot reach a local did:web → the Portal's own credential-request chain stalls. To show the callback, we bridge
-in the Portal DB (mark VALIDATE done, set the credential entries IN_PROGRESS, insert the AWAIT steps) and drive
-the credential requests directly on the IH. **This is demo-only, not a code change.** **Proper fix (removes all
-bridges):** run an in-cluster Universal Resolver and point `APPLICATIONCHECKLIST__DIM__UNIVERSALRESOLVERADDRESS`
-at it (or relax the validation for the sandbox) so `did:web:*.tx.test` resolves. Tracked as an open item.
+### D11 · `VALIDATE_DID_DOCUMENT` resolved by an **in-cluster did:web resolver shim** (was: DB bridge)
+
+**Problem:** `VALIDATE_DID_DOCUMENT` resolves the new `did:web:*.tx.test` via a Universal Resolver. The public
+`dev.uniresolver.io` cannot reach a local `did:web:*.tx.test` (the hosts only resolve inside the cluster, and the
+IdentityHub serves `did.json` Host-header-dependently), so the Portal's own credential-request chain stalled here.
+The **original demo workaround** was a Portal-DB bridge (mark VALIDATE done, set the credential entries IN_PROGRESS,
+insert the AWAIT steps) and drive the credential requests directly on the IH — demo-only, not a code change.
+
+**Fix (removes the bridge):** ship a tiny in-cluster **did:web Universal-Resolver shim** as a value-gated chart
+template — `charts/umbrella/templates/didweb-resolver.yaml` (gated by `didwebResolver.enabled`; a Python
+`ThreadingHTTPServer` mounted from a ConfigMap on `python:3.12-alpine`, Deployment + Service `didweb-resolver:8080`,
+deployed into `.Release.Namespace`). It implements `GET /1.0/identifiers/{did}` for `did:web` only: it fetches
+`http://{host}/{path}/did.json` (with `Host: {host}`) over the cluster network and returns the doc in the
+Universal-Resolver envelope `{ didDocument, didResolutionMetadata, didDocumentMetadata }` the Portal expects. The
+worker points at it via `portal.backend.processesworker.dim.universalResolverAddress: http://didweb-resolver:8080/`
+(in the onboarding overlays; renders to `APPLICATIONCHECKLIST__DIM__UNIVERSALRESOLVERADDRESS`).
+Verified: the provider's published did:web resolves (HTTP 200 + full `didDocument`, no `didResolutionMetadata.error`)
+→ VALIDATE passes with **no bridge**; an unpublished did:web returns `{"error":"notFound"}` → VALIDATE correctly fails.
+
+**Residual (separate from the resolver):** the resolver can only resolve a did:web the IdentityHub has actually
+**published**. A cleanly worker-created participant publishes its DID on activation (proven by the seeded provider);
+one whose create/activate raced does not (its `/{BPN}/did.json` returns 204), so its DID stays unresolvable until
+publishing succeeds. Ensuring worker-driven create→activate reliably publishes the DID is a wallet-creation matter
+(portal-backend `IdentityHubService` / the IH publish-on-activate), independent of the resolver — tracked as the one
+remaining open item for a fully-clean, bridge-free onboarding.
+
+**If did:web is used in production (what to do instead of the shim):** did:web itself is production-fine — you do
+**not** need this shim. In a real deployment the participant DID hosts are publicly reachable over **HTTPS** at
+`https://{host}/{optional-path}/did.json` (or `/.well-known/did.json` for a bare host), and a standard Universal
+Resolver's `did:web` driver resolves them directly. So: (1) publish each participant's `did:web` on a public HTTPS
+host with a valid TLS cert (set `EDC_IAM_DID_WEB_USE_HTTPS=true` on the IdentityHub/connector — the sandbox forces
+it to `false` precisely because `*.tx.test` is cleartext-only); (2) **drop** the
+`dim.universalResolverAddress` override and point it at a real resolver — the public `https://dev.uniresolver.io/1.0/`
+or a self-hosted `decentralized-identity/universal-resolver` (its `uni-resolver-driver-did-web` handles did:web out
+of the box). The shim exists **only** because the sandbox's did:web hosts are cluster-internal and served over
+cleartext; it is not a did:web limitation. **Alternative rejected:** relax/skip DID validation for the sandbox —
+hides a real integration step and diverges the sandbox from production; the shim keeps the exact same Portal code
+path exercised.
 
 ## What we deliberately did NOT change
 
@@ -155,7 +189,72 @@ at it (or relax the validation for the sandbox) so `did:web:*.tx.test` resolves.
 - **Upstream candidates:** the identityhub SPI event (`UPSTREAM-ISSUE.md`) + a generalised extension (D1, D3, D4);
   arguably the portal-backend IdentityHub wallet route (D-portal) if the project wants an OSS wallet option.
 - **Umbrella/sandbox-only:** the overlays (D9, D10), the seed guard (D8 — until the seed is refactored to a single
-  idempotent job upstream), the worker host/SMTP fixes (D6, D7 — umbrella deployment config), and the D11 bridge
-  (delete once a local Universal Resolver exists).
+  idempotent job upstream), the worker host/SMTP fixes (D6, D7 — umbrella deployment config), and the D11 did:web
+  resolver shim (chart template `templates/didweb-resolver.yaml`, gated by `didwebResolver.enabled` — drop it and
+  point at a real Universal Resolver in a public deployment).
 - **Working rule:** commits carry only the user's identity (DCO `-s`), no AI attribution; `CLAUDE.md` and these
   `docs/internal/*` planning docs stay local (never committed to main).
+
+## Production hardening (sandbox → real deployment)
+
+This stack is a **private repo deployed only to a local kind cluster**, so the items below are deliberately NOT
+fixed here — they are the things to do (or avoid) before anything like this runs in a shared/production environment.
+They are recorded so the sandbox shortcuts are explicit, not forgotten.
+
+- **Secrets — do not commit; source + rotate.** The pinned IdentityHub super-user key (`EDC_IH_API_SUPERUSER_KEY`,
+  a full Identity-API super-user) and the callback client secret are committed as literals across the overlays for
+  sandbox convenience. For production: source them from a k8s Secret via the existing `values-external-secrets.yaml`
+  path (single owner, rotatable), never commit, and treat any key that ever touched git history as compromised
+  (rotate the participant / rewrite history). The adopter overlay already uses a `REPLACE_WITH_*` placeholder for
+  the client secret — apply the same to the super-user key.
+- **Transport — TLS, not cleartext.** Token acquisition and the Portal callback run over `http://` through the
+  ingress; D4 pins the callback client to HTTP/1.1 precisely because h2c-over-cleartext hangs. Production: terminate
+  TLS on the ingress for the centralidp token endpoint and the Portal callback host — which also lets HTTP/2
+  negotiate over ALPN and retires the D4 pin.
+- **did:web resolution — real resolver + egress control.** The `didweb-resolver` shim resolves `did:web:*.tx.test`
+  only because those hosts are cluster-internal and cleartext. Production: publish participant DIDs on a public HTTPS
+  host (`EDC_IAM_DID_WEB_USE_HTTPS=true`) and point `dim.universalResolverAddress` at a real Universal Resolver
+  (`https://dev.uniresolver.io/1.0/` or a self-hosted `decentralized-identity/universal-resolver`). **Note (security
+  lens):** did:web inherently fetches attacker-influenceable hosts (a registrant supplies their own DID under
+  bring-your-own-wallet #1422), so swapping in a real resolver is necessary but **not sufficient** — the resolver
+  must also enforce a host allowlist, refuse redirects, and sit behind an egress `NetworkPolicy`. The shim leaves
+  these open on purpose (sandbox); do not carry that forward.
+- **Issuance-completion signal — event, not poll.** The observer polls `HolderCredentialRequestStore` every 10s
+  (no SPI event exists yet; `UPSTREAM-ISSUE.md` proposes one). Production/upstream target: an EDC
+  `HolderCredentialRequestObservable`/`EventRouter` event so the reaction is push-based. **Contested end-state:** a
+  fire-once event is lossy across restarts, so the robust design is *event + a durable notified-watermark*, not an
+  event that replaces the reconciler — keep the watermark either way.
+- **DCP data-exchange provisioning — the STS clientSecret (out of onboarding scope by design).**
+  `IdentityHubService.CreateHolderWalletAsync` obtains the holder's STS `clientSecret` only on the 201 create
+  (unrecoverable on 409). BE-293 onboarding deliberately does NOT retain it: onboarding's job is to create the wallet,
+  issue credentials, and advance the checklist for the company, which makes it a **credential holder**, not a
+  data-exchange peer — data
+  transfer in the dataspace is exercised by the dedicated provider/consumer connectors, not by onboarded holders, so
+  no per-participant connector (and no STS secret) is provisioned here. **If** an onboarded company is later given its
+  OWN connector, that connector needs this secret in its Vault (`edc-wallet-secret`) — it must be captured at create
+  time (rotate/recreate the participant otherwise) and provisioned directly to that Vault, never persisted in the
+  Portal. That is a separate step outside the onboarding flow, not a gap in it.
+
+## Fresh-rebuild validation (2026-07-18) — findings F1–F6
+
+A full from-scratch rebuild (teardown → build 6 images → cluster → Phase 1 → Phase 2 → §7 onboarding)
+was run to verify the documented process reproduces the stack. **§1–§6 reproduced GREEN** (DCP data
+transfer SUCCEEDED twice; resolver chart-template auto-deployed; extension active; migrations Complete).
+The **§7 IdentityHub onboarding** exposed a chain of real gaps — the original demo only "completed"
+because DB bridges papered over F5+F6. All blocking gaps are now fixed, and a **clean fresh onboarding
+ran the entire credential chain automatically, no nudges**:
+`CREATE_IDENTITY_HUB_WALLET → VALIDATE_DID_DOCUMENT → TRANSMIT_BPN_DID → REQUEST_{BPN,MEMBERSHIP}_CREDENTIAL →
+AWAIT_*_CREDENTIAL_RESPONSE` all DONE, **2 credentials ISSUED, both callbacks SUCCESSFUL**.
+
+| # | Gap | Layer | Fix | Status |
+|---|---|---|---|---|
+| **F1** | On a fresh Phase-1 install, connector control- AND data-planes CrashLoopBackOff until their PVC-backed Postgres is Ready; the EDC runtime *exits* on DB-refused at boot (probe-widening doesn't help) and the ~5 min backoff cap stalls self-recovery. | umbrella / k8s | Recovery = `kubectl delete pod` / `rollout restart` the plane pods once the `-db` pods are Running. Documented in runbook §5. | doc |
+| **F2** | Runbook §7.1 named the operator `cx-operator`, but the CX-Central seed's operator **username is the UUID** `ac1cf001-7fbc-1f2f-817f-bce058020006` (email `cx-operator@tx.org`). | umbrella / doc | Runbook §7.1 corrected (look up by email → username). | doc |
+| **F3** | Portal `bpnDidResolver.managementApiAddress` left at the chart default (`bpn-did-resolution-service-bdrs-server:8081`, nonexistent), API key empty → `TRANSMIT_BPN_DID` fails `Name does not resolve`. The connectors read BDRS via the directory API (`bdrs-server:8082`); the Portal write side was never wired. | umbrella config | Overlay: `portal.bpnDidResolver.managementApiAddress: http://bdrs-server:8081` + `processesworker.bpnDidResolver.apiKey: TEST` (matches `bdrs-server-memory` management authKey). | **fixed + validated** |
+| **F4** | Retrigger/recovery wiring is incomplete for the new IdentityHub steps: `RETRIGGER_CREATE_IDENTITY_HUB_WALLET` (810) and `RETRIGGER_TRANSMIT_DID_BPN` are NOT in `IDENTITY_WALLET.GetManualTriggerProcessStepIds()`, and BPNL/MEMBERSHIP_CREDENTIAL retrigger endpoints 400 too — so a *failed* IH-path step can't be operator-recovered. | portal-backend | Latent (only bites on failure, which F3/F5/F6 remove). Recorded for an upstream completion pass — extend the `ApplicationChecklistEntryTypeIdExtensions` manual-trigger maps + add the missing retrigger endpoints. | open (latent) |
+| **F5** | The IdentityHub wallet path stored the DID in `CompanyWalletData.Did` but never set `Company.DidDocumentLocation`, which the credential-request `holder` reads → `REQUEST_BPN_CREDENTIAL` fails `ConflictException: The holder must be set`. | portal-backend code | `IdentityHubBusinessLogic.CreateWalletInternal` now `AttachAndModifyCompany(... DidDocumentLocation = did)` (as the DIM/BYOW paths do). Built into `:be293`. | **fixed + validated** |
+| **F6** | The onboarded holder is never registered with the IssuerService → the holder's DCP credential request is rejected `401 "ID token verification failed: Participant not found"` → issuance UNSUCCESSFUL. | portal-backend code + umbrella config | `IdentityHubService.RequestCredentialAsync` now registers the holder first (`POST {issuerAdmin}/v1alpha/participants/{issuerCtx}/holders`, idempotent). **Live testing caught a base64-vs-plain ctx bug** — the IssuerService admin API wants the PLAIN ctx (like IH #937), not base64. New settings `IssuerAdmin{BaseAddress,ApiKey}`, `IssuerParticipantId`, `FrameworkContractVersion` wired via the portal chart patch + overlays; IssuerService super-user key pinned in `values-callback-activation.yaml`. | **fixed + validated** |
+
+**Bottom line:** the documented §2–§6 process reproduces the durable stack exactly. §7 onboarding now
+completes end-to-end automatically once F3 (config), F5 (code), F6 (code+config) are applied; F4 is a
+latent recovery-wiring gap that only matters when a step fails. F1/F2 are documentation corrections.
