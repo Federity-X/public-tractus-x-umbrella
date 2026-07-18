@@ -98,17 +98,37 @@ helm dependency update "$UMBRELLA_DIR" --skip-refresh
 # helm dependency update re-fetches the pristine chart each run, so re-applying every time is idempotent.
 PORTAL_PATCH="./hack/patches/portal-2.6.0-be293-identityhub.patch"
 PORTAL_TGZ=$(ls "$UMBRELLA_DIR"/charts/portal-*.tgz 2>/dev/null | head -1)
-if [[ -f "$PORTAL_PATCH" && -n "$PORTAL_TGZ" && -f "$PORTAL_TGZ" ]]; then
-  echo -e "\n🩹 Applying BE-293 IdentityHub patch to $(basename "$PORTAL_TGZ")..."
-  _tmp="$(mktemp -d)"
-  tar xzf "$PORTAL_TGZ" -C "$_tmp"
-  if patch -p1 -d "$_tmp/portal" < "$PORTAL_PATCH" >/dev/null; then
-    helm package "$_tmp/portal" -d "$UMBRELLA_DIR/charts" >/dev/null
-    echo "   portal chart patched + repackaged (IdentityHub wallet config exposed)."
-  else
-    echo "   ⚠️  portal patch did not apply cleanly (chart version bump?) — leaving chart unpatched." >&2
-  fi
-  rm -rf "$_tmp"
+# Fail FAST (no silent warn-and-continue): an unpatched portal chart renders NONE of the
+# umbrella's portal.backend.processesworker.{identityHub,dim} values (the IDENTITYHUB__* +
+# universal-resolver env block simply vanishes), so the worker starts with walletProvider=IdentityHub
+# but empty settings and onboarding fails deep at runtime with no pointer back here. Better to break
+# the bootstrap loudly than to install a silently-broken chart.
+if [[ ! -f "$PORTAL_PATCH" ]]; then
+  echo "❌ BE-293 portal patch not found: $PORTAL_PATCH" >&2
+  exit 1
 fi
+if [[ -z "$PORTAL_TGZ" || ! -f "$PORTAL_TGZ" ]]; then
+  echo "❌ portal chart tarball not found under $UMBRELLA_DIR/charts — did 'helm dependency update' fetch it?" >&2
+  exit 1
+fi
+# The patch targets portal-2.6.0 specifically; a version bump must be re-cut, not patched blind.
+if [[ "$(basename "$PORTAL_TGZ")" != "portal-2.6.0.tgz" ]]; then
+  echo "❌ portal chart is $(basename "$PORTAL_TGZ") but the BE-293 patch targets portal-2.6.0.tgz." >&2
+  echo "   Re-cut hack/patches/portal-*-be293-identityhub.patch for the new version before continuing." >&2
+  exit 1
+fi
+echo -e "\n🩹 Applying BE-293 IdentityHub patch to $(basename "$PORTAL_TGZ")..."
+_tmp="$(mktemp -d)"
+tar xzf "$PORTAL_TGZ" -C "$_tmp"
+if patch -p1 -d "$_tmp/portal" < "$PORTAL_PATCH" >/dev/null; then
+  helm package "$_tmp/portal" -d "$UMBRELLA_DIR/charts" >/dev/null
+  echo "   portal chart patched + repackaged (IdentityHub wallet config exposed)."
+else
+  rm -rf "$_tmp"
+  echo "❌ BE-293 portal patch did not apply cleanly. The umbrella's IdentityHub/DIM worker env" >&2
+  echo "   would be SILENTLY dropped and onboarding would fail at runtime. Fix the patch first." >&2
+  exit 1
+fi
+rm -rf "$_tmp"
 
 echo -e "\n✅ All charts up to date!"

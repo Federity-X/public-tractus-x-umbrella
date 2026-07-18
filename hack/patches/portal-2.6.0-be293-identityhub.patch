@@ -22,7 +22,7 @@
              - name: "APPLICATIONCHECKLIST__BPDM__STARTSHARINGSTATEASREADY"
                value: "{{ .Values.backend.processesworker.bpdm.startSharingStateAsReady }}"
              - name: "APPLICATIONCHECKLIST__BPDM__BUSINESSPARTNERPOOLBASEADDRESS"
-@@ -325,6 +333,29 @@
+@@ -325,6 +333,37 @@
                value: "{{ .Values.backend.processesworker.dim.encryptionConfigs.index0.cipherMode }}"
              - name: "APPLICATIONCHECKLIST__ISSUERCOMPONENT__ENCRYPTIONCONFIGS__0__PADDINGMODE"
                value: "{{ .Values.backend.processesworker.dim.encryptionConfigs.index0.paddingMode }}"
@@ -48,6 +48,14 @@
 +              value: "{{ .Values.backend.processesworker.identityHub.bpnCredentialDefinitionId }}"
 +            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__MEMBERSHIPCREDENTIALDEFINITIONID"
 +              value: "{{ .Values.backend.processesworker.identityHub.membershipCredentialDefinitionId }}"
++            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__ISSUERADMINBASEADDRESS"
++              value: "{{ .Values.backend.processesworker.identityHub.issuerAdminBaseAddress }}"
++            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__ISSUERADMINAPIKEY"
++              value: "{{ .Values.backend.processesworker.identityHub.issuerAdminApiKey }}"
++            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__ISSUERPARTICIPANTID"
++              value: "{{ .Values.backend.processesworker.identityHub.issuerParticipantId }}"
++            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__FRAMEWORKCONTRACTVERSION"
++              value: "{{ .Values.backend.processesworker.identityHub.frameworkContractVersion }}"
 +            {{- end }}
              - name: "BPNDIDRESOLVER__BASEADDRESS"
                value: "{{ .Values.bpnDidResolver.managementApiAddress }}"

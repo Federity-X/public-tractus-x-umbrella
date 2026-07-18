@@ -52,6 +52,14 @@ identity-and-trust-bundle:
         TX_PORTAL_CALLBACK_TOKEN_URL: "http://centralidp.tx.test/auth/realms/CX-Central/protocol/openid-connect/token"
         TX_PORTAL_CALLBACK_CLIENT_ID: "sa-cl24-01"
         TX_PORTAL_CALLBACK_CLIENT_SECRET: "changeme"
+  # (3) pin the IssuerService super-user key too, so the Portal can register onboarded holders with
+  #     the IssuerService (F6: POST /api/admin/.../holders). Distinct fixed value; must match
+  #     portal.backend.processesworker.identityHub.issuerAdminApiKey (values-combined-portal-additions.yaml).
+  #     Like the IH key, this only takes effect on a FRESH IssuerService (super-user created once at boot).
+  issuer-service:
+    issuerservice:
+      env:
+        EDC_IH_API_SUPERUSER_KEY: "c3VwZXItdXNlcg==.aXNzdWVyYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
 
 # Portal worker uses the SAME pinned super-user key to drive IdentityHub wallet ops.
 portal:

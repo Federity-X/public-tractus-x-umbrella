@@ -1,11 +1,30 @@
-# #############################################################################
+###############################################################
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License, Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0.
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
 # SPDX-License-Identifier: Apache-2.0
-# #############################################################################
+###############################################################
 # BE-293 Phase 2: add the Portal onboarding to the combined 'umbrella' release.
 # Layer AFTER the data-exchange profiles; the shared branch IdentityHub + IssuerService
 # (already deployed by the connector phase) serve both data-exchange AND onboarding.
 # wallet.mode/topology + IH/issuer images come from the data-exchange profiles.
 ---
+# In-cluster did:web resolver shim (templates/didweb-resolver.yaml) — lets VALIDATE_DID_DOCUMENT
+# resolve did:web:*.tx.test (sandbox-only; see the value's doc in values.yaml and D11).
+didwebResolver:
+  enabled: true
 centralidp:
   enabled: true
 sharedidp:
@@ -31,6 +50,14 @@ ssi-credential-issuer:
   enabled: false
 portal:
   enabled: true
+  # BPN-DID resolver = the umbrella's BDRS server (same one the connectors resolve against). The
+  # onboarding step TRANSMIT_BPN_DID registers the onboarded participant's BPN->DID via the BDRS
+  # MANAGEMENT API (port 8081, x-api-key), so that other dataspace participants can resolve it (the
+  # connectors read it back via the directory API on 8082, TX_EDC_IAM_DCP_BDRS_SERVER_URL). The chart
+  # default points at a nonexistent host (bpn-did-resolution-service-bdrs-server), so wire it to the
+  # in-cluster service. Key must match bdrs-server-memory.server.endpoints.management.authKey (TEST).
+  bpnDidResolver:
+    managementApiAddress: "http://bdrs-server:8081"
   backend:
     walletProvider: "IdentityHub"
     # smtp4dev is the in-cluster SMTP catcher (service smtp4dev:25). The chart default
@@ -56,6 +83,28 @@ portal:
       image: { name: "tractusx/portal-migrations", portalmigrationstag: "be293", pullPolicy: "Never" }
     processesworker:
       image: { name: "tractusx/portal-processes-worker", processesworkertag: "be293", pullPolicy: "Never" }
+      # BDRS management API key (rendered into secret key bpndidresolver-api-key -> BPNDIDRESOLVER__APIKEY).
+      # Must equal the umbrella BDRS management authKey so TRANSMIT_BPN_DID can register the BPN->DID.
+      bpnDidResolver:
+        apiKey: "TEST"
+      dim:
+        # VALIDATE_DID_DOCUMENT resolves the new did:web via a Universal Resolver (D11).
+        #
+        # Local sandbox (this profile): did:web:*.tx.test is only reachable INSIDE the cluster
+        # and is served Host-header-dependently by the IdentityHub — the public
+        # dev.uniresolver.io cannot reach it, so onboarding stalled here. We point at the
+        # in-cluster did:web resolver shim (chart template templates/didweb-resolver.yaml, gated
+        # by didwebResolver.enabled below; service didweb-resolver:8080), which fetches the
+        # IH-served did.json over the cluster network and returns it in Universal-Resolver
+        # envelope form — so *.tx.test resolves with no bridge.
+        #
+        # Production / real did:web: when the participant DIDs are PUBLICLY resolvable (a real
+        # did:web on a public host, or did:jwk/did:ion), drop this override and point at a real
+        # Universal Resolver instead — either the public https://dev.uniresolver.io/1.0/ or a
+        # self-hosted github.com/decentralized-identity/universal-resolver. The shim is only a
+        # sandbox stand-in for the *.tx.test hosts that no public resolver can reach; it is NOT a
+        # replacement for a real resolver in a public deployment.
+        universalResolverAddress: "http://didweb-resolver:8080/"
       identityHub:
         enabled: true
         # Participant-management (identity/admin) API is served on the ADMIN ingress host,
@@ -69,3 +118,12 @@ portal:
         membershipCredentialDefinitionId: "tx-membershipcredential"
         # Pinned super-user key (matches EDC_IH_API_SUPERUSER_KEY in values-callback-activation.yaml).
         apiKey: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
+        # IssuerService holder registration (F6): a Portal-onboarded holder must be registered with the
+        # IssuerService (POST /api/admin/v1alpha/participants/{issuerCtx}/holders, PLAIN ctx not base64)
+        # before it can request credentials — otherwise the DCP request is rejected 401 "Participant not
+        # found". Admin API on the issuer-service-admin host; key = the IssuerService super-user key
+        # (pinned via EDC_IH_API_SUPERUSER_KEY on the issuer-service in values-callback-activation.yaml).
+        issuerAdminBaseAddress: "http://issuer-service-admin.tx.test/api/admin"
+        issuerAdminApiKey: "c3VwZXItdXNlcg==.aXNzdWVyYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
+        issuerParticipantId: "issuer-bpnl00000003crhk"
+        frameworkContractVersion: "1.0"

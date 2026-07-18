@@ -1804,3 +1804,22 @@ cert-manager:
   enabled: false
 external-secrets:
   enabled: false
+
+# In-cluster did:web resolver shim (SANDBOX ONLY). Serves the Universal Resolver HTTP API
+# (GET /1.0/identifiers/{did}) for did:web:*.tx.test, which no public resolver can reach because
+# those hosts resolve only inside the cluster. The Portal onboarding step VALIDATE_DID_DOCUMENT
+# points at it via portal.backend.processesworker.dim.universalResolverAddress. Disabled by default;
+# the BE-293 onboarding overlays enable it. NOT for production — see the header of the rendered
+# template and docs/internal/BE-293-cross-repo-changes-and-decisions.md (D11) for the prod path
+# (real Universal Resolver over public-HTTPS did:web + host allowlist + egress NetworkPolicy).
+didwebResolver:
+  enabled: false
+  image: python:3.12-alpine
+  port: 8080
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

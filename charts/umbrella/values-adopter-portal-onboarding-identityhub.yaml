@@ -33,6 +33,11 @@
 # marked TODO below (bpn/membership credential-definition ids) — the IdentityHub
 # super-user key is PINNED here so the Portal has a stable key.
 
+# In-cluster did:web resolver shim (templates/didweb-resolver.yaml) so VALIDATE_DID_DOCUMENT can
+# resolve did:web:*.tx.test. Sandbox-only; see D11 for the production path.
+didwebResolver:
+  enabled: true
+
 # ---- wallet: IdentityHub (shared multi-tenant IH hosts all onboarded holders) ----
 wallet:
   mode: identityHub
@@ -107,7 +112,15 @@ identity-and-trust-bundle:
         # client below; TOKEN_URL is centralidp's token endpoint.
         TX_PORTAL_CALLBACK_BASE_URL: "http://portal-backend.tx.test"
         TX_PORTAL_CALLBACK_TOKEN_URL: "http://centralidp.tx.test/auth/realms/CX-Central/protocol/openid-connect/token"
-        TX_PORTAL_CALLBACK_CLIENT_ID: "sa-cl2-01"
+        # MUST be sa-cl24-01 — it is the ONLY base service account in the CX-Central realm seed
+        # granted BOTH Cl2-CX-Portal roles update_application_bpn_credential AND
+        # update_application_membership_credential, which the Portal issuer callback endpoints
+        # (/api/administration/registration/issuer/{bpn,membership}credential) require. sa-cl2-01
+        # holds only update_application_checklist_value → every callback 403s and (with the
+        # observer's terminal-4xx handling) the onboarding AWAIT_*_CREDENTIAL_RESPONSE step stalls.
+        # Keep this in sync with charts/values-callback-activation.yaml (the single source of truth
+        # for the callback client) — do not diverge the two.
+        TX_PORTAL_CALLBACK_CLIENT_ID: "sa-cl24-01"
         TX_PORTAL_CALLBACK_CLIENT_SECRET: "REPLACE_WITH_SA_CLIENT_SECRET"
   # IssuerService is unchanged by BE-293 (the observer is holder-side) — uses the existing image.
   issuer-service:
@@ -172,6 +185,17 @@ portal:
         # IssuerService credential-definition ids are fixed by the seed (cred_def_id_for = tx-<type>).
         bpnCredentialDefinitionId: "tx-bpncredential"
         membershipCredentialDefinitionId: "tx-membershipcredential"
+        # IssuerService holder registration (F6) — see values-combined-portal-additions.yaml for the
+        # rationale. Required before credential requests, else DCP 401 "Participant not found".
+        issuerAdminBaseAddress: "http://issuer-service-admin.tx.test/api/admin"
+        issuerAdminApiKey: "c3VwZXItdXNlcg==.aXNzdWVyYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
+        issuerParticipantId: "issuer-bpnl00000003crhk"
+        frameworkContractVersion: "1.0"
+      dim:
+        # VALIDATE_DID_DOCUMENT resolves the new did:web via the in-cluster resolver shim
+        # (didwebResolver.enabled below; chart template templates/didweb-resolver.yaml). See D11.
+        # Production: publish DIDs on public HTTPS and point at a real Universal Resolver instead.
+        universalResolverAddress: "http://didweb-resolver:8080/"
         # IdentityHub Identity-API key = the IH super-user key. Live testing showed authKeyAlias
         # (sup3r$3cr3t) is NOT accepted by the Identity API (401); the participant API requires the
         # SuperUserSeedExtension key. Pinned above via EDC_IH_API_SUPERUSER_KEY so it's stable.
