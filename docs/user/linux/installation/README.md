@@ -30,7 +30,7 @@ The currently available components are the following:
   - [dataspace-connector-bundle](../../../../charts/dataspace-connector-bundle)
     - [tractusx-edc](https://github.com/eclipse-tractusx/tractusx-edc/tree/0.13.0-rc2)
     - [vault](https://github.com/hashicorp/vault-helm/tree/v0.27.0)
-- [bdrs](https://github.com/eclipse-tractusx/bpn-did-resolution-service/tree/0.6.0) (**in memory** - no persistence possible)
+- [bdrs](https://github.com/eclipse-tractusx/bpn-did-resolution-service/tree/0.6.0) (defaults to **in-memory**; a PostgreSQL-backed `bdrs-server` is available in the durable profiles so the BPN→DID directory survives a restart)
 - [bpdm](https://github.com/eclipse-tractusx/bpdm/tree/release/7.2.x)
 - [identity-and-trust-bundle](../../../../charts/identity-and-trust-bundle)
   - [ssi-dim-wallet-stub](https://github.com/eclipse-tractusx/ssi-dim-wallet-stub/tree/ssi-dim-wallet-stub-memory-0.1.14) (`wallet.mode=stub`, default)
@@ -44,7 +44,8 @@ The currently available auxiliary components are following:
 
 - [external-secrets](https://github.com/external-secrets/external-secrets/tree/v0.18.2)
 - [pgadmin4](https://artifacthub.io/packages/helm/runix/pgadmin4/1.25.0)
-- [opentelemetry-collector](https://github.com/open-telemetry/opentelemetry-helm-charts/tree/opentelemetry-collector-0.90.0)
+- [opentelemetry-collector](https://github.com/open-telemetry/opentelemetry-helm-charts/tree/opentelemetry-collector-0.126.0)
+- [cert-manager](https://github.com/cert-manager/cert-manager/tree/v1.18.2) (TLS/staging path)
 - [jaeger](https://github.com/jaegertracing/helm-charts/tree/jaeger-3.0.7)
 - [prometheus](https://github.com/prometheus-community/helm-charts/tree/prometheus-27.1.0)
 - [grafana](https://github.com/grafana/helm-charts/tree/grafana-8.10.1)

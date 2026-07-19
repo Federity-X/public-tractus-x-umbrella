@@ -473,7 +473,7 @@ Applied and `helm lint`/`helm template`-verified:
 - [x] `tractusx-identityhub-memory v0.2.0` + `tractusx-issuerservice-memory v0.2.0` pinned as optional deps of `identity-and-trust-bundle`. [charts/identity-and-trust-bundle/Chart.yaml](../../charts/identity-and-trust-bundle/Chart.yaml)
 - [x] Default values for both charts that match real v0.2.0 schema (endpoints 8080–8087, two ingresses per IH for presentation + admin planes). [charts/identity-and-trust-bundle/values.yaml](../../charts/identity-and-trust-bundle/values.yaml)
 - [x] Shared-topology profile file. [charts/values-test-data-exchange-identity-hub.yaml](../../charts/values-test-data-exchange-identity-hub.yaml)
-- [x] Per-participant profile (documented target; wiring still missing). [charts/values-test-data-exchange-identity-hub-per-participant.yaml](../../charts/values-test-data-exchange-identity-hub-per-participant.yaml)
+- [x] Per-participant profile — **wired and E2E-validated** (see §0.2). [charts/values-test-data-exchange-identity-hub-per-participant.yaml](../../charts/values-test-data-exchange-identity-hub-per-participant.yaml) (+ `-per-participant-postgres.yaml`, `-per-participant-plus.yaml`, `-per-participant-postgres-plus.yaml`)
 - [x] Post-install seeding hook (`wallet.mode == identityHub`-gated) with real Identity API + Issuer Admin API calls, idempotent (409 → OK), schema-drift-tolerant. [charts/tx-data-provider/templates/post-install-identityhub-seed.yaml](../../charts/tx-data-provider/templates/post-install-identityhub-seed.yaml)
 - [x] Vault pre-seed guarded by `wallet.mode`, writes `identityhub-api-key` + `operator-sts-secret-alias`. [charts/tx-data-provider/templates/post-install-vault-setup.yaml](../../charts/tx-data-provider/templates/post-install-vault-setup.yaml)
 - [x] `ECOSYSTEM-GUIDE.md` section 7.y "Choosing a Wallet Implementation" documents the trade-off.
@@ -952,6 +952,15 @@ in Phase B before we commit to a PR strategy.
 ---
 
 ## 13. Alignment with the Tractus-X 26.06 release
+
+> **HISTORICAL (as of 2026-07):** the dates below (26.06 milestone, "Due 17 June 2026", the ~6-week
+> FOSS-Feature-Freeze window) are **past and closed**. Current release framing: components track
+> Tractus-X **R25.09**, migrating to **R25.12 / R26.06**. The #1610 portal integration referenced in
+> §13.2/§13.3 is now the **active BE-293 effort** (tractusx-identityhub + tractusx-issuerservice as the
+> holder wallet, with a `CREATE_IDENTITY_HUB_WALLET → … → AWAIT_*` onboarding chain and the
+> `portal-credential-callback` observer) — see `docs/internal/BE-293-cross-repo-changes-and-decisions.md`.
+> Portal-side `did:web` resolution is the value-gated `charts/umbrella/templates/didweb-resolver.yaml`
+> template. Treat §13 as a historical snapshot, not the current plan of record.
 
 > **Milestone:** [Release 26.06](https://github.com/eclipse-tractusx/sig-release/milestone/14) · **Due:** 17 June 2026 · **Scope:** 46 issues (1 closed, 45 open as of 2026-04-18)
 

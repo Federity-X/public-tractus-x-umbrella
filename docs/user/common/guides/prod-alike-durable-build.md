@@ -39,7 +39,7 @@ helm install umbrella charts/umbrella \
 | `values-test-data-exchange-identity-hub-per-participant-postgres.yaml` | Base topology: provider + consumer1, each on its **own PostgreSQL-backed** IdentityHub (Phase 1). |
 | `values-test-data-exchange-identity-hub-local-0.17.0.yaml` | In-flight EDC-0.17.0 image pins (built from source; see the companion guide). |
 | `values-test-data-exchange-identity-hub-per-participant-postgres-plus.yaml` | Admin-panel extras: consumer1 IdentityHub admin ingress + CentralIDP (Keycloak). |
-| `values-persistent-local.yaml` | Postgres PVCs (connectors + CentralIDP) + the **submodel backend on PostgreSQL** (its JPA image, Phase 3) + widened startup probes (issuer, BDRS, connector control-plane, submodel backend). |
+| `values-persistent-local.yaml` | Postgres PVCs (connectors + CentralIDP) + the **submodel backend on PostgreSQL** (its JPA image, Phase 3) + widened startup probes (issuer-service, connector control-plane, and `bdrs-server-memory` — inert when the durable profile runs the postgres `bdrs-server`). |
 | `values-vault-prod-local.yaml` | All three connector/issuer Vaults in **prod mode** (Raft integrated storage on a PVC + init/unseal + a fixed-id token) — Phase 2. |
 
 ## Phase 1 — persistent per-participant IdentityHubs

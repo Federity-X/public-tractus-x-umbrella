@@ -32,7 +32,7 @@ There are two independent lifecycle concerns: **(1) seal/unseal** and
 | **Unseal** | `vault operator init -key-shares=1 -key-threshold=1` runs once in the `postStart`; the **single unseal key + root token are written in plaintext** to `/vault/data/init.txt` on the PVC; every (re)start auto-unseals by reading that file. | No external KMS/HSM needed; a pod restart self-heals; fully reproducible on a laptop/kind. |
 | **Auth** | A **static token with a fixed, known id** (`txedcvaulttoken`) under one broad `secret/*` read-write policy, baked into every consumer's config (connector `EDC_VAULT_HASHICORP_TOKEN`, IdentityHub vault client, seed-Job `vaultToken`). | A prod Vault mints a *random* root token at init — unknown at Helm-template time. A chosen id lets every consumer keep a known value in config; no runtime token distribution. |
 | **Token lifetime** | A **periodic** token (`-period=8760h`), created at install. Periodic so EDC's scheduled renew *resets* the TTL to the period instead of shrinking it (see "Why not a refresh token"). | Must outlive a session without depending on a fragile renewal loop. |
-| **Storage** | `file` backend on a single PVC (`standalone` mode, 1 replica). | One node, no HA infra. |
+| **Storage** | Single-node **integrated Raft** storage on one PVC (`standalone` mode, 1 replica). | One node — Raft, but not clustered/HA. |
 | **Root token** | Left on the PVC (used by the `postStart` on each start). | Convenience — the init/unseal script needs it. |
 | **Policy** | One `secret/*` RW policy shared by all workloads. | Simplicity. |
 | **TLS** | Disabled (`tls_disable = 1`, in-cluster HTTP). | `.tx.test` sandbox uses HTTP throughout. |
@@ -70,7 +70,7 @@ optional for a real dataspace deployment.
 | **Auth** | Static token in config | **Kubernetes auth method** (`vault auth enable kubernetes`): each workload presents its **projected ServiceAccount token**; Vault maps SA → role → policy and returns a **short-lived, auto-renewed** token. Delivered by the **Vault Agent Injector** (already deployed in this chart — just unused) via pod annotations. Use **AppRole** only where SA-based identity isn't available. **No static token, no long TTL, nothing baked into config.** |
 | **EDC integration** | Reads `EDC_VAULT_HASHICORP_TOKEN` (literal) | Vault Agent logs in (k8s auth), renders the short-lived token into the pod, and **renews it in the background**; EDC reads it at start with its own `scheduled-renew` **disabled** (the agent owns renewal). On pod restart the agent re-authenticates and gets a fresh token. |
 | **Authorization** | One `secret/*` RW policy | **Least-privilege per workload** — each connector/IdentityHub gets a policy scoped to only *its own* secret paths, read-only where possible. |
-| **Storage / HA** | `file`, 1 replica | **Integrated Raft** (3+ replicas, HA) or Consul, with **TLS**, automated **snapshots/backup**, and disaster-recovery replication. |
+| **Storage / HA** | single-voter Raft, 1 replica | Scale the **integrated Raft** cluster to **3+ replicas (HA)** with **TLS**, automated **snapshots/backup**, and disaster-recovery replication. |
 | **Root token** | Persisted on PVC | **Revoked** immediately after init; recovery is break-glass only (generate-root with the recovery keys). |
 | **Secrets** | Static KV | **Rotation** (signing keys, client secrets), an **audit device** enabled, and **dynamic secrets** for anything that supports them (DB creds, PKI). |
 | **Transport** | HTTP | **mTLS** between clients and Vault; ingress/service-mesh policy. |
@@ -89,8 +89,8 @@ optional for a real dataspace deployment.
    `scheduled-renew` so the agent owns renewal.
 4. **Least-privilege policies**: replace the single `secret/*` policy with
    per-participant paths.
-5. **HA storage + TLS + audit**: Raft (3 nodes), TLS listener, snapshots, audit
-   device.
+5. **HA storage + TLS + audit**: scale the integrated Raft store from single-voter
+   to 3 nodes, add a TLS listener, snapshots, and an audit device.
 6. **Revoke the root token** and remove any on-disk key material.
 
 The application side (EDC, IdentityHub, IssuerService) needs **no code change** for

@@ -56,7 +56,7 @@ A self-sovereign identity string that maps to a participant's BPN. The DID forma
 | Wallet | DID Format | Resolution |
 |--------|-----------|------------|
 | SSI DIM Wallet Stub (current) | `did:web:ssi-dim-wallet-stub.tx.test:BPNL00000003AYRE` | All DIDs resolve to the single stub host |
-| Identity Hub (production) | `did:web:identity-hub-provider.tx.test:BPNL00000003AYRE` | Each DID resolves to the participant's own Identity Hub |
+| Identity Hub (production) | `did:web:ih-provider.tx.test:BPNL00000003AYRE` | Each DID resolves to the participant's own Identity Hub |
 
 > **In-cluster vs ingress DID form**: The umbrella uses two forms of wallet-stub DID depending on the profile:
 > - **Default** (`charts/umbrella/values.yaml`): `did:web:ssi-dim-wallet-stub.tx.test:<BPN>` (ingress hostname, used when consumers/providers resolve DIDs through the cluster ingress).
@@ -502,7 +502,7 @@ Consumer EDC ──► Provider EDC   ──► Provider asks Stub to verify
 │         │                           │                                     │
 │   2. POST /api/sts                  │                                     │
 │      {                              │                                     │
-│        audience: "did:web:identity-hub-provider.tx.test:BPNL...AYRE",    │
+│        audience: "did:web:ih-provider.tx.test:BPNL...AYRE",    │
 │        scope: "org.eclipse.tractusx.vc.type:MembershipCredential:read"   │
 │      }                              │                                     │
 │         ├──────────────────────────►│                                     │
@@ -967,7 +967,7 @@ Seeding happens automatically via Helm **post-install hooks** (Kubernetes Jobs t
 |-------|-------------|-----|-------------|
 | 1 | `-5` | Vault setup | Seeds each EDC Vault with keys, tokens, wallet secrets |
 | 2 | `-5` | BDRS setup | Seeds BPN↔DID mappings into the BDRS server |
-| 3 | `-4` | Testdata upload | Runs Python script to create EDC assets, policies, twins |
+| 3 | `-2` | Testdata upload | Runs Python script to create EDC assets, policies, twins |
 | — | (on startup) | Keycloak realm seeding | Init container creates realms, clients, service accounts |
 | — | (on startup) | Portal migration seeding | Seeds 16 companies, addresses, connectors into Portal DB |
 | — | (on startup) | Wallet seeding | SSI DIM Wallet creates DIDs for configured BPNs |

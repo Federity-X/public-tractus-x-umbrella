@@ -370,7 +370,7 @@ noted as a follow-up below.
   factory required by step 5.
 * **Fix:** `charts/identity-and-trust-bundle/Chart.yaml` — swap the
   dependency `tractusx-issuerservice-memory` → `tractusx-issuerservice`
-  (still v0.2.0, same alias `issuer-service`). The postgres chart bundles
+  (now v0.3.2, same alias `issuer-service`). The postgres chart bundles
   its own ephemeral postgres + vault (dev mode) subcharts, so no external
   infra is required for kind.
 * **Seed-Job side:** `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`
@@ -468,5 +468,5 @@ because #1609's acceptance criteria (step 1–step 7) are now met.
 | `charts/identity-and-trust-bundle/values.yaml`           | D10, D13, D14, D15 |
 | `charts/tx-data-provider/templates/post-install-identityhub-seed.yaml` | D10 (step 5/step 6 strict) |
 | `charts/values-test-data-exchange-identity-hub.yaml`     | D10 (comment)   |
-| `charts/umbrella/charts/tx-data-provider-0.4.6.tgz`      | D12 (repackaged)|
-| `charts/umbrella/charts/identity-and-trust-bundle-1.1.2.tgz` | D10, D13, D14, D15 (repackaged) |
+
+*(The repackaged `.tgz` chart archives are git-ignored build artifacts and are not tracked; regenerate them with `helm dependency update` / `hack/helm-dependencies.bash`.)*

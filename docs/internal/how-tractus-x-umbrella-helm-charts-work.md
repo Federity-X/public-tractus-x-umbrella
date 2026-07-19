@@ -15,7 +15,7 @@ The umbrella chart lives at `charts/umbrella/`. It is a pure orchestration chart
 | File | Purpose |
 |------|---------|
 | `Chart.yaml` | Declares all sub-chart dependencies with condition flags |
-| `values.yaml` | ~1600 lines of defaults; wires hostnames, credentials, and cross-service references |
+| `values.yaml` | ~1800 lines of defaults; wires hostnames, credentials, and cross-service references |
 | `templates/_helpers.tpl` | Shared template helpers (`app.name`, `app.fullname`, `app.chart`) |
 | `templates/*.yaml` | Infrastructure templates: SMTP server, BDRS seeding job, portal test-data ConfigMap, ESO/Vault SecretStore & ExternalSecret resources |
 
@@ -50,6 +50,7 @@ Every dependency has a `condition` flag that defaults to `false` in `values.yaml
 **Key patterns:**
 - **Alias usage**: `sdfactory` → alias `selfdescription`; `tx-data-provider` is reused 3× with aliases `dataconsumerOne` and `dataconsumerTwo`.
 - **Local vs Remote**: Bundle charts use `file://` references; product charts use the Tractus-X Helm registry.
+- **#1609 additions not shown above** (Chart.yaml has the full list): `bdrs-server` 0.6.0 (persistent PostgreSQL BDRS, mutually exclusive with `bdrs-server-memory`); `tractusx-identityhub-memory` aliased 3× as `identity-hub-provider` / `identity-hub-consumer1` / `identity-hub-consumer2` (v0.3.2, per-participant topology); and `tractusx-identityhub` aliased `identity-hub-consumer1-postgres` (v0.3.2).
 - **Condition flags** always follow the pattern `<name-or-alias>.enabled`.
 
 ### 1.3 Local Bundle Charts
@@ -61,7 +62,7 @@ Four reusable capability bundles sit in `charts/` alongside the umbrella:
 | `dataspace-connector-bundle` | `charts/dataspace-connector-bundle/` | tractusx-connector (0.13.0-rc2), postgresql (15.2.1), vault (0.27.0) |
 | `digital-twin-bundle` | `charts/digital-twin-bundle/` | digital-twin-registry, postgresql |
 | `data-persistence-layer-bundle` | `charts/data-persistence-layer-bundle/` | simple-data-backend |
-| `identity-and-trust-bundle` | `charts/identity-and-trust-bundle/` | ssi-dim-wallet-stub, postgresql |
+| `identity-and-trust-bundle` | `charts/identity-and-trust-bundle/` | `ssi-dim-wallet-stub` (0.1.14) **OR** `tractusx-identityhub[-memory]` + `tractusx-issuerservice` (v0.3.2), selected by `wallet.mode` |
 
 The `tx-data-provider` chart (`charts/tx-data-provider/`) composes the first three bundles into a complete dataspace participant, and adds post-install hooks for vault setup and test-data seeding.
 
@@ -153,7 +154,10 @@ Pre-built values files enable specific subsets of the stack:
 
 | File | What it enables |
 |------|----------------|
-| `values-test-data-exchange.yaml` | EDC provider + consumers, Wallet, BDRS (data exchange testing) |
+| `values-test-data-exchange.yaml` | EDC provider + consumers, stub Wallet, BDRS (data exchange testing) |
+| `values-test-data-exchange-identity-hub.yaml` | Data exchange with the **IdentityHub** wallet — shared topology (#1609) |
+| `values-test-data-exchange-identity-hub-per-participant.yaml` | IdentityHub, **per-participant** topology (`ih-<role>.tx.test`) |
+| `values-test-data-exchange-identity-hub-postgres.yaml` | IdentityHub with the **durable Postgres** variant (+ `-per-participant-postgres` / `-plus`) |
 | `values-test-iam-init-container-1.yaml` | CentralIDP + SharedIDP (IAM phase 1) |
 | `values-test-iam-init-container-2.yaml` | CentralIDP + SharedIDP (IAM phase 2) |
 | `values-test-shared-services-1.yaml` | Portal, IAM, BPDM |
@@ -282,8 +286,9 @@ Identity has three supporting components:
 > top-level `wallet.mode` in `charts/umbrella/values.yaml`:
 > - `wallet.mode: stub` → `ssi-dim-wallet-stub` (default, mock),
 > - `wallet.mode: identityHub` → real `tractusx-identityhub` + `tractusx-issuerservice`
->   (charts `v0.3.2`, in `identity-and-trust-bundle`), with **shared**,
->   **per-participant**, or **persistent (postgres)** topologies.
+>   (charts `v0.3.2`, in `identity-and-trust-bundle`), with a **shared** or
+>   **per-participant** topology, each optionally using a **persistent (postgres)**
+>   IdentityHub variant (`identity-hub-postgres` vs the in-memory `identity-hub`).
 >
 > The IdentityHub path provides real DID management, VC issuance/storage, the DCP
 > Secure Token Service, and credential verification, and the full DCP data exchange
@@ -499,7 +504,7 @@ curl http://identity-hub.tx.test/health
 | Risk | Mitigation |
 |------|-----------|
 | Chart structure changes between Tractus-X releases | Pin versions in Chart.yaml; review release notes before upgrading |
-| Helper templates in `hack/helm-dependencies.bash` add hidden behavior | Script only manages repos and `helm dependency update` ordering — no chart logic |
+| Helper templates in `hack/helm-dependencies.bash` add hidden behavior | Besides repos + `helm dependency update` ordering, the script also **unpacks, patches (`hack/patches/portal-2.6.0-be293-identityhub.patch`) and repackages the portal chart** for BE-293 IdentityHub onboarding, and **fails fast (exit 1)** if the patch/tarball is missing, the version is not `portal-2.6.0`, or the patch does not apply |
 | The SSI DIM Wallet Stub is deeply wired (EDC IATP, Portal DIM, Credential Issuer, BDRS) | All reference points documented in Step 3 above; systematic find-and-replace needed |
 | `tx-data-provider` post-install hooks assume specific Vault layout | If Identity Hub changes the secret paths, update `vault-edc-configmap.yaml` and `post-install-vault-setup.yaml` |
 | Keycloak realm seeding is image-based (init container) | Adding new clients/service accounts requires either updating the init container image or using `extraServiceAccounts` config |
