@@ -5,6 +5,17 @@ SPDX-License-Identifier: CC-BY-4.0
 # BE-293 — Architecture decision: credential-issuance completion signal
 
 > Internal planning doc. **Do not commit** (see CLAUDE.md working rules).
+>
+> ✅ **IMPLEMENTED (verified 2026-07-18) — the decision below stands** (holder-side push observer),
+> but the forward-looking **"Deployment config spec", "Deploy plan", and "Status"** sections are the
+> original plan and have drifted from the as-built config. The authoritative as-built reference is
+> `BE-293-cross-repo-changes-and-decisions.md` (findings F1–F6). Corrections:
+>
+> - The portal chart patch touches **5 files**, not just the worker: `cronjob-backend-processes.yaml`
+>   **+ `deployment-backend-administration.yaml` + `deployment-backend-registration.yaml`** + `secret-backend-interfaces.yaml` + `values.yaml`. `walletProvider` is a **top-level `backend.walletProvider`** (not `backend.processesworker.issuerComponent.walletProvider`), threaded through ACTIVATION/BPDM/ISSUERCOMPONENT/APPLICATIONCREATION; the IdentityHub env block is gated by `backend.processesworker.identityHub.enabled`.
+> - The config-key set has **4 more keys** than the table lists: `APPLICATIONCHECKLIST__IDENTITYHUB__{ISSUERADMINBASEADDRESS,ISSUERADMINAPIKEY,ISSUERPARTICIPANTID,FRAMEWORKCONTRACTVERSION}` — the **F6** IssuerService holder-registration step.
+> - The onboarding chain is `CREATE_IDENTITY_HUB_WALLET → VALIDATE_DID_DOCUMENT → TRANSMIT_BPN_DID → REQUEST_* → AWAIT_*`; `VALIDATE_DID_DOCUMENT` is served by the value-gated `charts/umbrella/templates/didweb-resolver.yaml` template.
+> - Chart delivery is **patch-and-repackage with fail-fast** in `hack/helm-dependencies.bash`, not `file://` vendoring. Overlay + patch are authored and the stack is deployed — the "remaining" items in Status are done.
 
 ## The problem
 

@@ -1226,10 +1226,10 @@ centralidp:
 
 **Add a new EDC participant** — use `tx-data-provider` as a dependency with an alias:
 ```yaml
-# In Chart.yaml
+# In Chart.yaml (version must match charts/tx-data-provider/Chart.yaml — currently 0.5.0)
 - name: tx-data-provider
   alias: myNewParticipant
-  version: 0.4.5
+  version: 0.5.0
   repository: file://../tx-data-provider
   condition: myNewParticipant.enabled
 ```

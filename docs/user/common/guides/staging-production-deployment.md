@@ -179,7 +179,9 @@ pattern in [network/tls.md](../../linux/network/tls.md). Example (Portal):
 portal:
   frontend:
     ingress:
-      annotations: { cert-manager.io/cluster-issuer: "umbrella-ca-issuer" }
+      # umbrella-ca-issuer is a NAMESPACED Issuer (see values-tls.yaml) → use cert-manager.io/issuer.
+      # Reserve cert-manager.io/cluster-issuer for a cluster-scoped ClusterIssuer (the §3.2 private-CA path).
+      annotations: { cert-manager.io/issuer: "umbrella-ca-issuer" }
       tls:
         - secretName: "portal.dataspace.example.com-tls"
           hosts: ["portal.dataspace.example.com"]

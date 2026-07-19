@@ -33,12 +33,13 @@ flowchart TD
 
     W4 --> V1["VALIDATE_DID_DOCUMENT (P worker)"]
     V1 --> V2{"Resolve did:web via<br/>UNIVERSALRESOLVERADDRESS"}
-    V2 -->|"in-cluster didweb-resolver shim (U):<br/>fetch IH did.json → resolver envelope → 200"| R1["REQUEST_*_CREDENTIAL"]
-    V2 -->|"prod: real Universal Resolver over public HTTPS did:web"| R1
+    V2 -->|"in-cluster didweb-resolver shim (U):<br/>fetch IH did.json → resolver envelope → 200"| TX
+    V2 -->|"prod: real Universal Resolver over public HTTPS did:web"| TX
     V2 -.->|"only if DID unpublished (204/notFound) —<br/>worker create/activate race, open item"| VX["step FAILS<br/>(publish the DID, then re-run)"]
+    TX["TRANSMIT_BPN_DID (P worker) — F3<br/>register BPN→DID in BDRS (bdrs-server:8081, key TEST)"] --> R1
 
     subgraph CRED["Credential request + DCP issuance"]
-        R1["REQUEST_BPN_CREDENTIAL + REQUEST_MEMBERSHIP_CREDENTIAL (P)<br/>POST IH /participants/{ctx}/credentials/request {issuerDid,type}"]
+        R1["REQUEST_BPN_CREDENTIAL + REQUEST_MEMBERSHIP_CREDENTIAL (P)<br/>register holder w/ IssuerService (F6, plain ctx) →<br/>POST IH /participants/{ctx}/credentials/request {issuerDid,type}"]
         R1 --> R2["schedule AWAIT_{BPN,MEMBERSHIP}_CREDENTIAL_RESPONSE (P)"]
         R1 --> D1["DCP: holder IH ⇄ IssuerService (IH/IS)"]
         D1 --> D2["HolderCredentialRequest → ISSUED<br/>VC stored in holder wallet (IH)"]

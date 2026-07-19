@@ -6,6 +6,17 @@
 
 # BE-293 — POC: IdentityHub + IssuerService as the Portal onboarding wallet
 
+> ⚠️ **SUPERSEDED PLANNING DOC (kept for history).** This was the *original* task breakdown, which
+> assumed a **poll→callback bridge** ("IdentityHub has no callback → poll-driven", `POLL_*` step types,
+> a poll-only detector). That is **NOT what was built.** The delivered design is a **holder-side PUSH
+> observer** — the `portal-credential-callback` extension in the IdentityHub runtime scans the
+> `HolderCredentialRequestStore` for terminal state (ISSUED/ERROR) and POSTs the Portal's *existing*
+> issuer callback, so the `AWAIT_{BPN,MEMBERSHIP}_CREDENTIAL_RESPONSE` steps are **unchanged** (no
+> `POLL_*` steps, no bridge). See **D1** in `BE-293-cross-repo-changes-and-decisions.md`. Consequently
+> **BE-293-1, BE-293-5, the de-risk section, and prod-architecture point 2 below are obsolete**; the
+> onboarding was validated end-to-end (findings F1–F6, all fixed) with the push observer. For the
+> current, accurate picture use the decisions record + the full-rebuild runbook, not this file.
+>
 > **Jira:** <https://dsaas-tvs.atlassian.net/browse/BE-293>
 > **Goal:** make the Tractus-X Portal onboarding flow issue onboarding credentials via the
 > **IdentityHub IssuerService** (DCP holder-pull), with **IdentityHub the DEFAULT wallet and
