@@ -1,7 +1,6 @@
 <!--
   Copyright (c) 2026 Contributors to the Eclipse Foundation
   SPDX-License-Identifier: CC-BY-4.0
-  INTERNAL decision record — do NOT commit to main (per repo working rules). Local reference only.
 -->
 
 # BE-293 / sig-release #1609 — cross-repo change & decision record

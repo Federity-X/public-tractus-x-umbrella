@@ -534,8 +534,8 @@ is the entry point):
 
 **Internal working notes** (provenance only — not part of the user-facing deliverable, and partly historical):
 
-- [#1609 plan](../../../internal/plan-1609-identityhub-connector-bundle.md) — design rationale, version strategy, and PR-positioning note
-- [How the umbrella Helm charts work](../../../internal/how-tractus-x-umbrella-helm-charts-work.md) — chart composition reference
+- [Cross-repo changes & decisions](../../../dev/BE-293-cross-repo-changes-and-decisions.md) — design rationale, decisions (D1–D11), and fresh-rebuild findings (F1–F6)
+- [How the umbrella Helm charts work](../../../dev/how-tractus-x-umbrella-helm-charts-work.md) — chart composition reference
 - [Phase-9 local deploy & test findings](../../../common/concept/1609-local-test-findings.md) — historical defect log (superseded; see the plan)
 
 ## NOTICE

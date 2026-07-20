@@ -1,6 +1,6 @@
 # How Tractus-X Umbrella Helm Charts Work
 
-**Internal Technical Reference — eclipse-tractusx/sig-release#1609** (internal ref: BE-165)
+**Technical Reference — eclipse-tractusx/sig-release#1609**
 
 This document explains the structure of the Tractus-X umbrella Helm chart, how configuration flows into sub-charts, how secrets/infrastructure are wired, and provides a step-by-step checklist for adding a new component (e.g. Identity Hub).
 

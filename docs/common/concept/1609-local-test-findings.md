@@ -14,7 +14,7 @@
 > IdentityHub/IssuerService `v0.3.2` (not `v0.2.0`), `identity-and-trust-bundle`
 > `1.2.0` (not `1.1.2`), `tx-data-provider` `0.5.0` (not `0.4.6`) — and
 > "issuance not available end-to-end" no longer holds. For the current standing
-> see `docs/internal/plan-1609-identityhub-connector-bundle.md` section 0.2 and
+> see `docs/dev/BE-293-cross-repo-changes-and-decisions.md` and
 > `docs/user/common/guides/data-exchange-identity-hub.md`.
 
 _Ran on macOS + kind (`kind-umbrella-1609`, K8s v1.35.0) against

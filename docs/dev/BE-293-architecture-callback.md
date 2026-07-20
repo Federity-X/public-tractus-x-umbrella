@@ -4,18 +4,15 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # BE-293 — Architecture decision: credential-issuance completion signal
 
-> Internal planning doc. **Do not commit** (see CLAUDE.md working rules).
+> Architecture decision record (ADR) for the BE-293 IdentityHub onboarding-wallet integration.
 >
-> ✅ **IMPLEMENTED (verified 2026-07-18) — the decision below stands** (holder-side push observer),
-> but the forward-looking **"Deployment config spec", "Deploy plan", and "Status"** sections are the
-> original plan and have drifted from the as-built config. The authoritative as-built reference is
-> `BE-293-cross-repo-changes-and-decisions.md` (findings F1–F6). Corrections:
->
-> - The portal chart patch touches **5 files**, not just the worker: `cronjob-backend-processes.yaml`
->   **+ `deployment-backend-administration.yaml` + `deployment-backend-registration.yaml`** + `secret-backend-interfaces.yaml` + `values.yaml`. `walletProvider` is a **top-level `backend.walletProvider`** (not `backend.processesworker.issuerComponent.walletProvider`), threaded through ACTIVATION/BPDM/ISSUERCOMPONENT/APPLICATIONCREATION; the IdentityHub env block is gated by `backend.processesworker.identityHub.enabled`.
-> - The config-key set has **4 more keys** than the table lists: `APPLICATIONCHECKLIST__IDENTITYHUB__{ISSUERADMINBASEADDRESS,ISSUERADMINAPIKEY,ISSUERPARTICIPANTID,FRAMEWORKCONTRACTVERSION}` — the **F6** IssuerService holder-registration step.
-> - The onboarding chain is `CREATE_IDENTITY_HUB_WALLET → VALIDATE_DID_DOCUMENT → TRANSMIT_BPN_DID → REQUEST_* → AWAIT_*`; `VALIDATE_DID_DOCUMENT` is served by the value-gated `charts/umbrella/templates/didweb-resolver.yaml` template.
-> - Chart delivery is **patch-and-repackage with fail-fast** in `hack/helm-dependencies.bash`, not `file://` vendoring. Overlay + patch are authored and the stack is deployed — the "remaining" items in Status are done.
+> ✅ **IMPLEMENTED & verified 2026-07-18** (holder-side push observer). The problem/decision/rationale
+> below stand. One caveat: the **"Deployment config spec" table** further down predates the **F6**
+> IssuerService holder-registration step, so it omits 4 keys —
+> `APPLICATIONCHECKLIST__IDENTITYHUB__{ISSUERADMINBASEADDRESS,ISSUERADMINAPIKEY,ISSUERPARTICIPANTID,FRAMEWORKCONTRACTVERSION}`.
+> For the complete **as-built** config (chart patch across 5 files, top-level `backend.walletProvider`,
+> the value-gated `charts/umbrella/templates/didweb-resolver.yaml`, patch-and-repackage-with-fail-fast
+> bootstrap) see `BE-293-cross-repo-changes-and-decisions.md` (findings F1–F6) and `BE-293-full-rebuild-runbook.md`.
 
 ## The problem
 
@@ -162,60 +159,18 @@ Unset `base-url` leaves the extension inert:
 
 (`bpn-credential-type`/`membership-credential-type`/`scope`/`interval-seconds` default correctly.)
 
-## Status (all code + schema done, build+test verified; deploy pending)
+## Status — implemented & verified
 
-- portal-backend `feat/BE-293-identityhub-wallet`: wallet client, keyed-DI issuer selector +
-  `IdentityHubIssuerComponentService`, EF migration `…_BE293IdentityHubWalletStepTypes`,
-  config-safety gating, tests (31 fixed + 3 new, green). Uncommitted.
-- tractusx-identityhub: `extensions/portal-credential-callback` observer, wired into both IH
-  runtimes (Gradle build-verified). Uncommitted.
-- Remaining (operational): build the forked portal + identityhub images, author the umbrella
-  values overlay wiring the config above, deploy `wallet.mode=identityHub` + `WalletProvider=IdentityHub`,
-  validate onboarding issues credentials through IdentityHub end-to-end.
+Implemented across three repos and **validated end-to-end** (fresh from-scratch umbrella build): a
+clean Portal onboarding runs the whole chain automatically — `CREATE_IDENTITY_HUB_WALLET →
+VALIDATE_DID_DOCUMENT → TRANSMIT_BPN_DID → REQUEST_{BPN,MEMBERSHIP}_CREDENTIAL → (holder pull) →
+observer callback → AWAIT_*_CREDENTIAL_RESPONSE → … → CLEARING_HOUSE → activation` — both credentials
+ISSUED, both callbacks SUCCESSFUL, no bridges.
 
-## Deploy plan (increment 4) — investigated, precise, cluster-dependent
+For the **as-built** details (the exact chart patch, config keys incl. the F6 IssuerService
+holder-registration keys, and the deploy/verify steps) see:
 
-Finding from the fetched `portal-2.6.0` chart: the backend deployments **hardcode** every env var
-(no generic `extraEnv`). `cronjob-backend-processes.yaml` emits `APPLICATIONCHECKLIST__DIM__*` /
-`APPLICATIONCHECKLIST__ISSUERCOMPONENT__*` from `.Values.backend.processesworker.{dim,issuerComponent}.*`
-(secrets via `secretKeyRef`). So wiring the IdentityHub config needs a **portal-chart patch**, not
-just umbrella values. Only the **processes-worker** needs it (with the config-safety gating, the
-administration service never runs the wallet/issuer steps, so it needs nothing new).
-
-**Portal-chart patch (minimal, upstreamable) — `cronjob-backend-processes.yaml`, add:**
-```yaml
-- name: "APPLICATIONCHECKLIST__ISSUERCOMPONENT__WALLETPROVIDER"
-  value: "{{ .Values.backend.processesworker.issuerComponent.walletProvider }}"   # e.g. IdentityHub
-- name: "APPLICATIONCHECKLIST__IDENTITYHUB__BASEADDRESS"
-  value: "{{ .Values.backend.processesworker.identityHub.baseAddress }}"
-- name: "APPLICATIONCHECKLIST__IDENTITYHUB__APIKEY"
-  valueFrom: { secretKeyRef: { name: "{{ .Values.backend.interfaces.secret }}", key: "identityhub-api-key" } }
-- name: "APPLICATIONCHECKLIST__IDENTITYHUB__DIDDOCUMENTBASELOCATION"
-  value: "{{ .Values.backend.processesworker.identityHub.didDocumentBaseLocation }}"
-- name: "APPLICATIONCHECKLIST__IDENTITYHUB__CREDENTIALSERVICEBASEADDRESS"
-  value: "{{ .Values.backend.processesworker.identityHub.credentialServiceBaseAddress }}"
-- name: "APPLICATIONCHECKLIST__IDENTITYHUB__ISSUERDID"
-  value: "{{ .Values.backend.processesworker.identityHub.issuerDid }}"
-- name: "APPLICATIONCHECKLIST__IDENTITYHUB__BPNCREDENTIALDEFINITIONID"
-  value: "{{ .Values.backend.processesworker.identityHub.bpnCredentialDefinitionId }}"
-- name: "APPLICATIONCHECKLIST__IDENTITYHUB__MEMBERSHIPCREDENTIALDEFINITIONID"
-  value: "{{ .Values.backend.processesworker.identityHub.membershipCredentialDefinitionId }}"
-```
-plus `values.yaml` defaults under `backend.processesworker`: `issuerComponent.walletProvider: ""`
-and an `identityHub:` block (empty defaults). Vendor the patched chart locally (`file://`) or carry
-it as an upstream PR.
-
-**Ordered deploy steps:**
-1. Portal-chart patch above (vendor locally). `helm template` to verify the env renders.
-2. Build forked images: `portal-backend`, `portal-processes-worker` (with the BE-293 code + migration),
-   and `docker-identityhub(-memory)` (with the `portal-credential-callback` extension).
-3. IdentityHub runtime: set a FIXED super-user key (`edc.ih.api.superuser.key`) so the Portal's
-   `IdentityHub:ApiKey` is stable, and set the `tx.portal.callback.*` settings (investigate the
-   identity-and-trust-bundle's EDC-config/env mechanism — likely a config map or env passthrough).
-4. Umbrella overlay `values-adopter-portal-onboarding-identityhub.yaml`: `wallet.mode=identityHub`,
-   the forked image tags, the processes-worker `identityHub`/`walletProvider` values, and a Portal
-   technical user (client-id/secret) granted `update_application_{bpn,membership}_credential` for the
-   IH extension's callback.
-5. Deploy; run API-driven onboarding (as validated in Phase B); confirm the checklist advances
-   `CREATE_IDENTITY_HUB_WALLET → VALIDATE_DID → REQUEST_BPN_CREDENTIAL → (holder pull) → extension
-   callback → AWAIT_BPN_CREDENTIAL_RESPONSE done → …MEMBERSHIP… → CLEARING_HOUSE → activation`.
+- `BE-293-cross-repo-changes-and-decisions.md` — the change + decision record (D1–D11) and the
+  fresh-rebuild findings F1–F6.
+- `BE-293-full-rebuild-runbook.md` — the from-scratch build → deploy → verify runbook.
+- `../user/common/guides/data-exchange-identity-hub.md` — the user-facing IdentityHub guide.

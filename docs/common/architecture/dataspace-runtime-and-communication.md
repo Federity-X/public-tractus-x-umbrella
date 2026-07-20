@@ -241,7 +241,7 @@ image overlay (`…-local-0.17.0.yaml`).
 
 - **[ECOSYSTEM-GUIDE.md](../../../ECOSYSTEM-GUIDE.md)** — structural overview (all components, Helm layering).
 - **[data-exchange-identity-hub.md](../../user/common/guides/data-exchange-identity-hub.md)** — deploy + seed + smoke test for the IH stack.
-- **[how-tractus-x-umbrella-helm-charts-work.md](../../internal/how-tractus-x-umbrella-helm-charts-work.md)** — chart wiring / config flow.
+- **[how-tractus-x-umbrella-helm-charts-work.md](../../dev/how-tractus-x-umbrella-helm-charts-work.md)** — chart wiring / config flow.
 - **`hack/dcp-data-transfer-smoke.sh`** — the runnable reference for Flows B–D (authoritative for endpoints).
 - Bruno / Postman collections under `docs/common/api/`.
 
