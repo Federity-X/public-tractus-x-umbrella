@@ -6,3 +6,6 @@ Chart.lock
 target/
 **/values-local.yaml
 **/your-values.yaml
+
+# Local-only coding-agent context — must never be committed (kept on disk, untracked).
+CLAUDE.md
