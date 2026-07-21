@@ -178,7 +178,9 @@ portal:
       # identityHub.enabled=true (portal-chart BE-293 patch).
       identityHub:
         enabled: true
-        baseAddress: "http://identity-hub.tx.test/api/identity"
+        # Participant-management (identity) API is served on the ADMIN ingress host; the public
+        # identity-hub.tx.test 405s on POST /participants. credentialService/didDocument stay public.
+        baseAddress: "http://identity-hub-admin.tx.test/api/identity"
         didDocumentBaseLocation: "identity-hub.tx.test"
         credentialServiceBaseAddress: "http://identity-hub.tx.test/api/credentials"
         issuerDid: "did:web:issuer-service.tx.test:BPNL00000003CRHK"
@@ -191,12 +193,13 @@ portal:
         issuerAdminApiKey: "c3VwZXItdXNlcg==.aXNzdWVyYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
         issuerParticipantId: "issuer-bpnl00000003crhk"
         frameworkContractVersion: "1.0"
+        # IdentityHub Identity-API super-user key. Must live under identityHub (the chart's secret binds
+        # identityHub.apiKey), NOT dim. Live testing showed authKeyAlias (sup3r$3cr3t) is NOT accepted by
+        # the Identity API (401); the participant API requires the SuperUserSeedExtension key. Pinned via
+        # EDC_IH_API_SUPERUSER_KEY so it's stable.
+        apiKey: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
       dim:
         # VALIDATE_DID_DOCUMENT resolves the new did:web via the in-cluster resolver shim
         # (didwebResolver.enabled below; chart template templates/didweb-resolver.yaml). See D11.
         # Production: publish DIDs on public HTTPS and point at a real Universal Resolver instead.
         universalResolverAddress: "http://didweb-resolver:8080/"
-        # IdentityHub Identity-API key = the IH super-user key. Live testing showed authKeyAlias
-        # (sup3r$3cr3t) is NOT accepted by the Identity API (401); the participant API requires the
-        # SuperUserSeedExtension key. Pinned above via EDC_IH_API_SUPERUSER_KEY so it's stable.
-        apiKey: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="

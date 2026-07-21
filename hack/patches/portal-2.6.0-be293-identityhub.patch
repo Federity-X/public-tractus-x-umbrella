@@ -5,31 +5,16 @@
              - name: "APPLICATIONACTIVATION__USEDIMWALLET"
                value: "{{ .Values.backend.useDimWallet }}"
 +            {{- if .Values.backend.walletProvider }}
-+            - name: "APPLICATIONACTIVATION__WALLETPROVIDER"
++            - name: "ONBOARDING__WALLETPROVIDER"
 +              value: "{{ .Values.backend.walletProvider }}"
 +            {{- end }}
              - name: "APPLICATIONCHECKLIST__BPDM__BASEADDRESS"
                value: "{{ .Values.bpdm.portalGateAddress }}{{ .Values.bpdm.portalGateApiPath }}"
              - name: "APPLICATIONCHECKLIST__BPDM__CLIENTID"
-@@ -153,6 +157,10 @@
-               value: "{{ .Values.backend.placeholder }}"
-             - name: "APPLICATIONCHECKLIST__BPDM__USEDIMWALLET"
-               value: "{{ .Values.backend.useDimWallet }}"
-+            {{- if .Values.backend.walletProvider }}
-+            - name: "APPLICATIONCHECKLIST__BPDM__WALLETPROVIDER"
-+              value: "{{ .Values.backend.walletProvider }}"
-+            {{- end }}
-             - name: "APPLICATIONCHECKLIST__BPDM__STARTSHARINGSTATEASREADY"
-               value: "{{ .Values.backend.processesworker.bpdm.startSharingStateAsReady }}"
-             - name: "APPLICATIONCHECKLIST__BPDM__BUSINESSPARTNERPOOLBASEADDRESS"
-@@ -325,6 +333,37 @@
+@@ -325,6 +333,33 @@
                value: "{{ .Values.backend.processesworker.dim.encryptionConfigs.index0.cipherMode }}"
              - name: "APPLICATIONCHECKLIST__ISSUERCOMPONENT__ENCRYPTIONCONFIGS__0__PADDINGMODE"
                value: "{{ .Values.backend.processesworker.dim.encryptionConfigs.index0.paddingMode }}"
-+            {{- if .Values.backend.walletProvider }}
-+            - name: "APPLICATIONCHECKLIST__ISSUERCOMPONENT__WALLETPROVIDER"
-+              value: "{{ .Values.backend.walletProvider }}"
-+            {{- end }}
 +            {{- if .Values.backend.processesworker.identityHub.enabled }}
 +            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__BASEADDRESS"
 +              value: "{{ .Values.backend.processesworker.identityHub.baseAddress }}"
@@ -60,36 +45,14 @@
              - name: "BPNDIDRESOLVER__BASEADDRESS"
                value: "{{ .Values.bpnDidResolver.managementApiAddress }}"
              - name: "BPNDIDRESOLVER__APIKEY"
-@@ -549,6 +580,10 @@
-               value: "{{ .Values.backend.processesworker.mailing.encryptionConfigs.index0.paddingMode }}"
-             - name: "APPLICATIONCREATION_USEDIMWALLET"
-               value: "{{ .Values.backend.useDimWallet }}"
-+            {{- if .Values.backend.walletProvider }}
-+            - name: "APPLICATIONCREATION__WALLETPROVIDER"
-+              value: "{{ .Values.backend.walletProvider }}"
-+            {{- end }}
-             - name: "SELFDESCRIPTIONCREATIONPROCESS__SELFDESCRIPTIONDOCUMENTURL"
-               value: "{{ .Values.portalBackendAddress }}{{ .Values.backend.administration.connectors.selfDescriptionDocumentPath }}"
-             ports:
 --- a/templates/deployment-backend-administration.yaml
 +++ b/templates/deployment-backend-administration.yaml
-@@ -115,6 +115,10 @@
-           value: "{{ .Values.backend.placeholder }}"
-         - name: "APPLICATIONCHECKLIST__BPDM__USEDIMWALLET"
-           value: "{{ .Values.backend.useDimWallet }}"
-+        {{- if .Values.backend.walletProvider }}
-+        - name: "APPLICATIONCHECKLIST__BPDM__WALLETPROVIDER"
-+          value: "{{ .Values.backend.walletProvider }}"
-+        {{- end }}
-         - name: "APPLICATIONCHECKLIST__BPDM__STARTSHARINGSTATEASREADY"
-           value: "{{ .Values.backend.processesworker.bpdm.startSharingStateAsReady }}"
-         - name: "APPLICATIONCHECKLIST__BPDM__BUSINESSPARTNERPOOLBASEADDRESS"
 @@ -482,6 +486,10 @@
            value: "{{ .Values.portalAddress }}{{ .Values.backend.portalHelpPath }}"
          - name: "REGISTRATION__USEDIMWALLET"
            value: "{{ .Values.backend.useDimWallet }}"
 +        {{- if .Values.backend.walletProvider }}
-+        - name: "REGISTRATION__WALLETPROVIDER"
++        - name: "ONBOARDING__WALLETPROVIDER"
 +          value: "{{ .Values.backend.walletProvider }}"
 +        {{- end }}
          - name: "SERVICEACCOUNT__CLIENTID"
@@ -102,7 +65,7 @@
          - name: "APPLICATIONCREATION__USEDIMWALLET"
            value: "{{ .Values.backend.useDimWallet }}"
 +        {{- if .Values.backend.walletProvider }}
-+        - name: "APPLICATIONCREATION__WALLETPROVIDER"
++        - name: "ONBOARDING__WALLETPROVIDER"
 +          value: "{{ .Values.backend.walletProvider }}"
 +        {{- end }}
          ports:
