@@ -176,6 +176,42 @@ cleartext; it is not a did:web limitation. **Alternative rejected:** relax/skip 
 hides a real integration step and diverges the sandbox from production; the shim keeps the exact same Portal code
 path exercised.
 
+### D12 · BE-324 — re-sync the umbrella with the newer portal-backend contract
+
+**Why:** the wiring above was validated (2026-07-18) against an earlier `feat/BE-293-identityhub-wallet`. The
+backend then moved on (HEAD `2b9ab02e4`): it **decoupled `VALIDATE_DID_DOCUMENT` from the DIM settings** onto a
+dedicated `IdentityHub:UniversalResolverAddress` (`[Required]`) + `IdentityHub:MaxValidationTimeInDays`
+(`[Range(1,∞)]`), and **replaced the per-feature `UseDimWallet` flags with a single `[Required]`
+`Onboarding:WalletProvider`** (`Dim|Custodian|IdentityHub`). Against that backend the previous chart would fail
+worker **startup** (missing `[Required]` keys) and silently ignore `UseDimWallet`. BE-324 (umbrella commit
+`062d1ce`) catches the chart up:
+
+- **Render the two now-`[Required]` IdentityHub settings** — `identityHub.universalResolverAddress`
+  (→ `APPLICATIONCHECKLIST__IDENTITYHUB__UNIVERSALRESOLVERADDRESS`, points at the D11 shim) and
+  `identityHub.maxValidationTimeInDays` (→ `…__MAXVALIDATIONTIMEINDAYS`, default `7`). They sit in the patch's
+  existing `if identityHub.enabled` block because the backend validates the IdentityHub section *only when it is
+  present*, so a DIM/Custodian worker (section absent) is unaffected. The older `dim.universalResolverAddress`
+  override is left in the overlays but is **no longer read** on the IdentityHub path.
+- **Drop the six dead `*_USEDIMWALLET` env vars** (and `portal.backend.useDimWallet`) — superseded by the
+  `ONBOARDING__WALLETPROVIDER` the overlays already set to `IdentityHub`.
+- **Fail-fast render guard** `umbrella.validatePortalWalletProvider` (run from the always-rendered
+  `configmap-wallet-mode`): when `portal.enabled`, `portal.backend.walletProvider` must be a non-empty
+  `Dim|Custodian|IdentityHub` — otherwise an empty value passes `helm template` and fails only at worker startup.
+- **Pin the callback-bearing IdentityHub runtime to `replicaCount: 1`** (memory + postgres) — the
+  `portal-credential-callback` observer dedups delivered callbacks in-memory per replica, so `>1` double-fires
+  (extension `UPSTREAM-ISSUE.md`).
+- **Single-source the BPN/Membership credential-type strings** across the IH extension
+  (`tx.portal.callback.{bpn,membership}.credential.type`) and the backend
+  (`APPLICATIONCHECKLIST__IDENTITYHUB__{BPN,MEMBERSHIP}CREDENTIALTYPE`) — YAML anchors in the adopter overlay,
+  matching defaults on the durable path — because a mismatch is an invisible stall at `AWAIT_*_CREDENTIAL_RESPONSE`.
+
+`hack/patches/portal-2.6.0-be293-identityhub.patch` was regenerated to add the resolver + credential-type env and
+delete the `USEDIMWALLET` env; it still applies cleanly (`patch -p1`, `helm lint OK`), `helm template` renders all
+of the above (and the guard fails an empty `walletProvider`), and the portal `:be293` images were rebuilt from
+`2b9ab02e4`. **Alternative rejected:** default `walletProvider` in the chart — the backend deliberately dropped
+the default so an upgrade can't silently move a deployment onto a different wallet; the render guard preserves
+that intent at `helm template` time.
+
 ## What we deliberately did NOT change
 
 - **tractusx-edc / DTR** — used as-is from their branches; the 431 and the DCP flow were fixed via seed/BDRS/config,

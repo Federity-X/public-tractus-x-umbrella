@@ -237,8 +237,11 @@ no separate `kubectl apply`. Confirm it is up:
 kubectl rollout status -n umbrella deploy/didweb-resolver --timeout=180s
 ```
 
-The worker already points at it (`portal.backend.processesworker.dim.universalResolverAddress: http://didweb-resolver:8080/`
-→ `APPLICATIONCHECKLIST__DIM__UNIVERSALRESOLVERADDRESS`). Verify it resolves a **published** did:web:
+The worker points at it. On the current backend (BE-324 sync, see D12) the IdentityHub wallet reads the DID
+resolver from `portal.backend.processesworker.identityHub.universalResolverAddress: http://didweb-resolver:8080/`
+→ `APPLICATIONCHECKLIST__IDENTITYHUB__UNIVERSALRESOLVERADDRESS` (paired with `…IDENTITYHUB__MAXVALIDATIONTIMEINDAYS`),
+which `VALIDATE_DID_DOCUMENT` now uses instead of the older `…DIM__UNIVERSALRESOLVERADDRESS` (the `dim.` override is
+retained but no longer read on the IdentityHub path). Verify it resolves a **published** did:web:
 
 ```bash
 kubectl run rtest -n umbrella --image=curlimages/curl:latest --restart=Never --rm -i --command -- \
