@@ -84,7 +84,7 @@
          - name: "APPLICATIONCHECKLIST__BPDM__STARTSHARINGSTATEASREADY"
            value: "{{ .Values.backend.processesworker.bpdm.startSharingStateAsReady }}"
          - name: "APPLICATIONCHECKLIST__BPDM__BUSINESSPARTNERPOOLBASEADDRESS"
-@@ -480,8 +478,10 @@
+@@ -480,8 +478,49 @@
            value: "{{ .Values.backend.administration.registration.documentTypeIds.type0 }}"
          - name: "REGISTRATION__HELPADDRESS"
            value: "{{ .Values.portalAddress }}{{ .Values.backend.portalHelpPath }}"
@@ -93,6 +93,45 @@
 +        {{- if .Values.backend.walletProvider }}
 +        - name: "ONBOARDING__WALLETPROVIDER"
 +          value: "{{ .Values.backend.walletProvider }}"
++        {{- end }}
++        {{- if .Values.backend.processesworker.identityHub.enabled }}
++        # BE-293: the Administration service also registers the IdentityHub client
++        # (Program.cs AddApplicationChecklist -> AddIdentityHubService, ValidateOnStart),
++        # so it needs the SAME IdentityHub config as the processes-worker — it hosts the
++        # retrigger-*-credential endpoints and the issuer callback receiver.
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__BASEADDRESS"
++          value: "{{ .Values.backend.processesworker.identityHub.baseAddress }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__APIKEY"
++          valueFrom:
++            secretKeyRef:
++              name: "{{ .Values.backend.interfaces.secret }}"
++              key: "identityhub-api-key"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__DIDDOCUMENTBASELOCATION"
++          value: "{{ .Values.backend.processesworker.identityHub.didDocumentBaseLocation }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__CREDENTIALSERVICEBASEADDRESS"
++          value: "{{ .Values.backend.processesworker.identityHub.credentialServiceBaseAddress }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__ISSUERDID"
++          value: "{{ .Values.backend.processesworker.identityHub.issuerDid }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__BPNCREDENTIALDEFINITIONID"
++          value: "{{ .Values.backend.processesworker.identityHub.bpnCredentialDefinitionId }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__MEMBERSHIPCREDENTIALDEFINITIONID"
++          value: "{{ .Values.backend.processesworker.identityHub.membershipCredentialDefinitionId }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__ISSUERADMINBASEADDRESS"
++          value: "{{ .Values.backend.processesworker.identityHub.issuerAdminBaseAddress }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__ISSUERADMINAPIKEY"
++          value: "{{ .Values.backend.processesworker.identityHub.issuerAdminApiKey }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__ISSUERPARTICIPANTID"
++          value: "{{ .Values.backend.processesworker.identityHub.issuerParticipantId }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__FRAMEWORKCONTRACTVERSION"
++          value: "{{ .Values.backend.processesworker.identityHub.frameworkContractVersion }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__UNIVERSALRESOLVERADDRESS"
++          value: "{{ .Values.backend.processesworker.identityHub.universalResolverAddress }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__MAXVALIDATIONTIMEINDAYS"
++          value: "{{ .Values.backend.processesworker.identityHub.maxValidationTimeInDays }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__BPNCREDENTIALTYPE"
++          value: "{{ .Values.backend.processesworker.identityHub.bpnCredentialType }}"
++        - name: "APPLICATIONCHECKLIST__IDENTITYHUB__MEMBERSHIPCREDENTIALTYPE"
++          value: "{{ .Values.backend.processesworker.identityHub.membershipCredentialType }}"
 +        {{- end }}
          - name: "SERVICEACCOUNT__CLIENTID"
            value: "{{ .Values.backend.administration.serviceAccount.clientId }}"
