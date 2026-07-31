@@ -7,9 +7,6 @@ target/
 **/values-local.yaml
 **/your-values.yaml
 
-# Local-only coding-agent context — must never be committed (kept on disk, untracked).
-CLAUDE.md
-
 # Local-only ephemeral planning docs (work-planning; never committed per working rules).
 # Durable developer docs live under docs/dev/, docs/common/, docs/user/.
 docs/internal/
