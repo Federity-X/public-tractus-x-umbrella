@@ -1,9 +1,11 @@
 --- a/templates/cronjob-backend-processes.yaml
 +++ b/templates/cronjob-backend-processes.yaml
-@@ -132,6 +132,10 @@
+@@ -130,8 +130,10 @@
+               value: "{{ .Values.portalAddress }}{{ .Values.backend.portalIntroductionCompanyRolePath }}"
+             - name: "APPLICATIONACTIVATION__DATASPACEADDRESS"
                value: "{{ .Values.portalAddress }}{{ .Values.backend.portalIntroductionDataspacePath }}"
-             - name: "APPLICATIONACTIVATION__USEDIMWALLET"
-               value: "{{ .Values.backend.useDimWallet }}"
+-            - name: "APPLICATIONACTIVATION__USEDIMWALLET"
+-              value: "{{ .Values.backend.useDimWallet }}"
 +            {{- if .Values.backend.walletProvider }}
 +            - name: "ONBOARDING__WALLETPROVIDER"
 +              value: "{{ .Values.backend.walletProvider }}"
@@ -11,7 +13,16 @@
              - name: "APPLICATIONCHECKLIST__BPDM__BASEADDRESS"
                value: "{{ .Values.bpdm.portalGateAddress }}{{ .Values.bpdm.portalGateApiPath }}"
              - name: "APPLICATIONCHECKLIST__BPDM__CLIENTID"
-@@ -325,6 +333,33 @@
+@@ -151,8 +153,6 @@
+               value: "{{ .Values.backend.processesworker.bpdm.scope }}"
+             - name: "APPLICATIONCHECKLIST__BPDM__USERNAME"
+               value: "{{ .Values.backend.placeholder }}"
+-            - name: "APPLICATIONCHECKLIST__BPDM__USEDIMWALLET"
+-              value: "{{ .Values.backend.useDimWallet }}"
+             - name: "APPLICATIONCHECKLIST__BPDM__STARTSHARINGSTATEASREADY"
+               value: "{{ .Values.backend.processesworker.bpdm.startSharingStateAsReady }}"
+             - name: "APPLICATIONCHECKLIST__BPDM__BUSINESSPARTNERPOOLBASEADDRESS"
+@@ -325,6 +325,41 @@
                value: "{{ .Values.backend.processesworker.dim.encryptionConfigs.index0.cipherMode }}"
              - name: "APPLICATIONCHECKLIST__ISSUERCOMPONENT__ENCRYPTIONCONFIGS__0__PADDINGMODE"
                value: "{{ .Values.backend.processesworker.dim.encryptionConfigs.index0.paddingMode }}"
@@ -41,16 +52,44 @@
 +              value: "{{ .Values.backend.processesworker.identityHub.issuerParticipantId }}"
 +            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__FRAMEWORKCONTRACTVERSION"
 +              value: "{{ .Values.backend.processesworker.identityHub.frameworkContractVersion }}"
++            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__UNIVERSALRESOLVERADDRESS"
++              value: "{{ .Values.backend.processesworker.identityHub.universalResolverAddress }}"
++            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__MAXVALIDATIONTIMEINDAYS"
++              value: "{{ .Values.backend.processesworker.identityHub.maxValidationTimeInDays }}"
++            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__BPNCREDENTIALTYPE"
++              value: "{{ .Values.backend.processesworker.identityHub.bpnCredentialType }}"
++            - name: "APPLICATIONCHECKLIST__IDENTITYHUB__MEMBERSHIPCREDENTIALTYPE"
++              value: "{{ .Values.backend.processesworker.identityHub.membershipCredentialType }}"
 +            {{- end }}
              - name: "BPNDIDRESOLVER__BASEADDRESS"
                value: "{{ .Values.bpnDidResolver.managementApiAddress }}"
              - name: "BPNDIDRESOLVER__APIKEY"
+@@ -547,8 +582,6 @@
+               value: "{{ .Values.backend.processesworker.mailing.encryptionConfigs.index0.cipherMode }}"
+             - name: "MAILINGPROCESSCREATION__ENCRYPTIONCONFIGS__0__PADDINGMODE"
+               value: "{{ .Values.backend.processesworker.mailing.encryptionConfigs.index0.paddingMode }}"
+-            - name: "APPLICATIONCREATION_USEDIMWALLET"
+-              value: "{{ .Values.backend.useDimWallet }}"
+             - name: "SELFDESCRIPTIONCREATIONPROCESS__SELFDESCRIPTIONDOCUMENTURL"
+               value: "{{ .Values.portalBackendAddress }}{{ .Values.backend.administration.connectors.selfDescriptionDocumentPath }}"
+             ports:
 --- a/templates/deployment-backend-administration.yaml
 +++ b/templates/deployment-backend-administration.yaml
-@@ -482,6 +486,10 @@
+@@ -113,8 +113,6 @@
+           value: "{{ .Values.backend.processesworker.bpdm.scope }}"
+         - name: "APPLICATIONCHECKLIST__BPDM__USERNAME"
+           value: "{{ .Values.backend.placeholder }}"
+-        - name: "APPLICATIONCHECKLIST__BPDM__USEDIMWALLET"
+-          value: "{{ .Values.backend.useDimWallet }}"
+         - name: "APPLICATIONCHECKLIST__BPDM__STARTSHARINGSTATEASREADY"
+           value: "{{ .Values.backend.processesworker.bpdm.startSharingStateAsReady }}"
+         - name: "APPLICATIONCHECKLIST__BPDM__BUSINESSPARTNERPOOLBASEADDRESS"
+@@ -480,8 +478,10 @@
+           value: "{{ .Values.backend.administration.registration.documentTypeIds.type0 }}"
+         - name: "REGISTRATION__HELPADDRESS"
            value: "{{ .Values.portalAddress }}{{ .Values.backend.portalHelpPath }}"
-         - name: "REGISTRATION__USEDIMWALLET"
-           value: "{{ .Values.backend.useDimWallet }}"
+-        - name: "REGISTRATION__USEDIMWALLET"
+-          value: "{{ .Values.backend.useDimWallet }}"
 +        {{- if .Values.backend.walletProvider }}
 +        - name: "ONBOARDING__WALLETPROVIDER"
 +          value: "{{ .Values.backend.walletProvider }}"
@@ -60,10 +99,12 @@
          - name: "SERVICEACCOUNT__ENCRYPTIONCONFIGINDEX"
 --- a/templates/deployment-backend-registration.yaml
 +++ b/templates/deployment-backend-registration.yaml
-@@ -218,6 +218,10 @@
+@@ -216,8 +216,10 @@
+           value: "{{ .Values.backend.processesworker.mailing.encryptionConfigs.index0.cipherMode }}"
+         - name: "MAILINGPROCESSCREATION__ENCRYPTIONCONFIGS__0__PADDINGMODE"
            value: "{{ .Values.backend.processesworker.mailing.encryptionConfigs.index0.paddingMode }}"
-         - name: "APPLICATIONCREATION__USEDIMWALLET"
-           value: "{{ .Values.backend.useDimWallet }}"
+-        - name: "APPLICATIONCREATION__USEDIMWALLET"
+-          value: "{{ .Values.backend.useDimWallet }}"
 +        {{- if .Values.backend.walletProvider }}
 +        - name: "ONBOARDING__WALLETPROVIDER"
 +          value: "{{ .Values.backend.walletProvider }}"
@@ -102,7 +143,7 @@
    keycloak:
      # -- Secret containing the database-password and the client-secret for the connection to the centralidp (CX IAM) and the client-secret for the connection to the sharedidp (CX-IAM).
      secret: "portal-backend-keycloak"
-@@ -1005,6 +1009,23 @@
+@@ -1005,6 +1009,30 @@
        clientSecret: ""
        grantType: "client_credentials"
        scope: "openid"
@@ -123,6 +164,13 @@
 +      membershipCredentialDefinitionId: ""
 +      # -- Super-user API key for the IdentityHub admin API. Secret-key 'identityhub-api-key'.
 +      apiKey: ""
++      # -- Universal resolver for VALIDATE_DID_DOCUMENT; point at the in-cluster didweb-resolver shim ([Required]).
++      universalResolverAddress: ""
++      # -- Days a holder did:web may stay unresolvable before VALIDATE_DID_DOCUMENT fails ([Range] >= 1).
++      maxValidationTimeInDays: 7
++      # -- Credential type strings; MUST equal the IdentityHub extension tx.portal.callback.*.credential.type.
++      bpnCredentialType: "BpnCredential"
++      membershipCredentialType: "MembershipCredential"
      bpnDidResolver:
        # -- ApiKey for management endpoint of the bpnDidResolver. Secret-key 'bpndidresolver-api-key'.
        apiKey: ""

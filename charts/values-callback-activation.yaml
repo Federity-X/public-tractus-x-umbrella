@@ -44,6 +44,10 @@
 identity-and-trust-bundle:
   identity-hub-postgres:
     identityhub:
+      # BE-293 (IH callback): the portal-credential-callback observer dedups delivered callbacks
+      # IN-MEMORY per replica; >1 replica => N duplicate callbacks per terminal request. Keep at 1
+      # until the extension gains a persisted marker / leader election (extension UPSTREAM-ISSUE.md).
+      replicaCount: 1
       env:
         # (1) stable, known super-user key (see header)
         EDC_IH_API_SUPERUSER_KEY: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="

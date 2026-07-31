@@ -127,3 +127,8 @@ portal:
         issuerAdminApiKey: "c3VwZXItdXNlcg==.aXNzdWVyYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
         issuerParticipantId: "issuer-bpnl00000003crhk"
         frameworkContractVersion: "1.0"
+        # BE-293: the newer backend resolves the holder's did:web via IdentityHub:UniversalResolverAddress
+        # ([Required]) instead of the DIM setting — same in-cluster resolver shim as the dim: block above.
+        universalResolverAddress: "http://didweb-resolver:8080/"
+        # VALIDATE_DID_DOCUMENT deadline (days) before the step fails for a manual retrigger ([Range] >= 1).
+        maxValidationTimeInDays: 7

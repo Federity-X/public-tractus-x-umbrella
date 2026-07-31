@@ -100,6 +100,10 @@ identity-and-trust-bundle:
         repository: docker-identityhub-memory
         tag: latest
         pullPolicy: Never
+      # BE-293 (IH callback): the portal-credential-callback observer dedups delivered callbacks
+      # IN-MEMORY per replica; >1 replica => N duplicate callbacks per terminal request. Keep at 1
+      # until the extension gains a persisted marker / leader election (extension UPSTREAM-ISSUE.md).
+      replicaCount: 1
       # Arbitrary EDC settings passed as env (the subchart ranges over identityhub.env).
       # EDC maps env NAME -> config key by lowercasing and turning _ into . or - .
       env:
@@ -122,6 +126,11 @@ identity-and-trust-bundle:
         # for the callback client) — do not diverge the two.
         TX_PORTAL_CALLBACK_CLIENT_ID: "sa-cl24-01"
         TX_PORTAL_CALLBACK_CLIENT_SECRET: "REPLACE_WITH_SA_CLIENT_SECRET"
+        # BE-293 §5: single-source the credential-type strings via YAML anchors so the IH extension
+        # (these keys) and the Portal backend (portal.backend.processesworker.identityHub.*CredentialType
+        # below) can never drift; both MUST equal the issued VC `type`.
+        TX_PORTAL_CALLBACK_BPN_CREDENTIAL_TYPE: &bpnCredType "BpnCredential"
+        TX_PORTAL_CALLBACK_MEMBERSHIP_CREDENTIAL_TYPE: &membershipCredType "MembershipCredential"
   # IssuerService is unchanged by BE-293 (the observer is holder-side) — uses the existing image.
   issuer-service:
     enabled: true
@@ -187,6 +196,11 @@ portal:
         # IssuerService credential-definition ids are fixed by the seed (cred_def_id_for = tx-<type>).
         bpnCredentialDefinitionId: "tx-bpncredential"
         membershipCredentialDefinitionId: "tx-membershipcredential"
+        # BE-293 §5: credential TYPE strings, single-sourced via the anchors on the IH runtime's
+        # TX_PORTAL_CALLBACK_*_CREDENTIAL_TYPE above; the backend renders these into
+        # APPLICATIONCHECKLIST__IDENTITYHUB__{BPN,MEMBERSHIP}CREDENTIALTYPE, so a drift is impossible.
+        bpnCredentialType: *bpnCredType
+        membershipCredentialType: *membershipCredType
         # IssuerService holder registration (F6) — see values-combined-portal-additions.yaml for the
         # rationale. Required before credential requests, else DCP 401 "Participant not found".
         issuerAdminBaseAddress: "http://issuer-service-admin.tx.test/api/admin"
@@ -198,6 +212,11 @@ portal:
         # the Identity API (401); the participant API requires the SuperUserSeedExtension key. Pinned via
         # EDC_IH_API_SUPERUSER_KEY so it's stable.
         apiKey: "c3VwZXItdXNlcg==.cG9ydGFsYmUyOTNzdXBlcnVzZXJmaXhlZGtleTEyMzQ1Njc4OTA="
+        # BE-293: the newer backend resolves the holder's did:web via IdentityHub:UniversalResolverAddress
+        # ([Required]) instead of the DIM setting — point it at the same in-cluster resolver shim.
+        universalResolverAddress: "http://didweb-resolver:8080/"
+        # VALIDATE_DID_DOCUMENT deadline (days) before the step fails for a manual retrigger ([Range] >= 1).
+        maxValidationTimeInDays: 7
       dim:
         # VALIDATE_DID_DOCUMENT resolves the new did:web via the in-cluster resolver shim
         # (didwebResolver.enabled below; chart template templates/didweb-resolver.yaml). See D11.

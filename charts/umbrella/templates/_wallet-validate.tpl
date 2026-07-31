@@ -73,3 +73,26 @@ Call from any rendered template with: {{ include "umbrella.validateWallet" . }}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+*****************************************************************************
+* Portal onboarding wallet-provider guard (BE-293).
+*
+* The Portal backend's Onboarding:WalletProvider is [Required] with NO default
+* (it replaced the per-feature UseDimWallet flags). An empty or unknown value
+* passes `helm template` but fails the worker at STARTUP ("The WalletProvider
+* field is required" / a config-convert error) — a late, opaque failure. When
+* the portal is enabled, fail the render instead unless
+* portal.backend.walletProvider is exactly one of Dim | Custodian | IdentityHub.
+*****************************************************************************
+*/}}
+{{- define "umbrella.validatePortalWalletProvider" -}}
+{{- $portal := .Values.portal | default dict -}}
+{{- if $portal.enabled -}}
+{{- $backend := $portal.backend | default dict -}}
+{{- $wp := $backend.walletProvider | default "" -}}
+{{- if not (has $wp (list "Dim" "Custodian" "IdentityHub")) -}}
+{{- fail (printf "portal.backend.walletProvider must be one of Dim|Custodian|IdentityHub when portal.enabled=true (got %q). The Portal backend's Onboarding:WalletProvider is [Required] with no default; an empty/invalid value passes `helm template` but fails worker startup at runtime. Set it explicitly in your portal overlay." $wp) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

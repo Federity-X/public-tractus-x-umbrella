@@ -12,6 +12,7 @@
 # message.
 {{- include "umbrella.validateWallet" . }}
 {{- include "umbrella.validateIdentityHubImageOverlay" . }}
+{{- include "umbrella.validatePortalWalletProvider" . }}
 ---
 apiVersion: v1
 kind: ConfigMap
