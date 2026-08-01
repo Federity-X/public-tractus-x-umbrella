@@ -31,11 +31,11 @@ Ask per machine; on the reference box:
 
 | Repo | Path | Branch |
 |---|---|---|
-| umbrella | `/Users/tvs-indetechs/public-tractus-x-umbrella` | `feature/BE-241-admin-panel-per-participant-plus` |
+| umbrella | `/Users/tvs-indetechs/public-tractus-x-umbrella` | `feat/BE-293-connector-bundle-and-portal-integration` |
 | identityhub | `/Users/tvs-indetechs/IdeaProjects/public-tractusx-identityhub` | `feat/holder-credential-request-status-callback` (on top of Federity-X `fix/321-322-dcp-e2e-collections-and-charts`) |
+| portal-backend | `/Users/tvs-indetechs/projects/portal-backend` | `feat/BE-293-identityhub-wallet` (built into the `:be293` images) |
 | tractusx-edc | `/Users/tvs-indetechs/IdeaProjects/public-tractusx-edc` | `main` (== upstream) |
 | DTR | `/Users/tvs-indetechs/IdeaProjects/public-sldt-digital-twin-registry` | `feat/shell-descriptors-sort-direction` |
-| portal-backend (source ref only) | `/Users/tvs-indetechs/projects/portal-backend` | — |
 
 - JDK 21 for the Gradle builds: `export JAVA_HOME=/Users/tvs-indetechs/Library/Java/JavaVirtualMachines/ms-21.0.8/Contents/Home` (default `java` is 25).
 - Docker Desktop VM ~24 GiB+ (reference: 31 GiB). `helm`, `kubectl`, `kind`.
@@ -176,6 +176,15 @@ The connector Postgres PVCs persist across this upgrade, so the EDC schema is NO
 upgrade with `relation "edc_contract_negotiation" does not exist`, the connector DBs were recreated empty —
 `kubectl rollout restart deploy -l ...edc-controlplane/-dataplane` to re-provision the schema.
 
+**Verify the Portal processes (esp. the Administration service) are up:** on the IdentityHub profile both the
+`processes-worker` cronjob AND the `administration` deployment must render the 15
+`APPLICATIONCHECKLIST__IDENTITYHUB__*` vars, or the admin pod CrashLoopBackOffs (BE-324 / D13):
+```bash
+kubectl rollout status -n umbrella deploy/umbrella-portal-administration-service --timeout=180s   # 1/1, 0 restarts
+kubectl logs deploy/umbrella-portal-processes-worker -n umbrella | grep "Onboarding wallet provider resolved"
+#   -> Onboarding wallet provider resolved: IdentityHub   (logged once per process at startup)
+```
+
 **Verify the extension is ACTIVE:**
 ```bash
 IH=$(kubectl get po -n umbrella -o name | grep identity-hub-postgres- | grep -v postgresql | head -1)
@@ -266,13 +275,25 @@ needs no bridge** in either case.
 - **`values-combined-portal-additions.yaml`:** worker `IDENTITYHUB__BASEADDRESS` → **admin** host
   `identity-hub-admin.tx.test` (public host 405s on POST /participants); mailer → **`smtp4dev:25`** (default
   points at an SMTP-less host → 75 s connect-timeout per mail, starving the worker); Portal apiKey = pinned key.
+- **Administration-service IdentityHub env (BE-324):** the portal chart patch
+  (`hack/patches/portal-2.6.0-be293-identityhub.patch`) now renders the same 15
+  `APPLICATIONCHECKLIST__IDENTITYHUB__*` vars into `deployment-backend-administration.yaml`, **not only** the
+  `processes-worker` cronjob. The Administration service registers the IdentityHub client via
+  `AddApplicationChecklist` → `AddIdentityHubService` (which binds `IdentityHubSettings` with `ValidateOnStart`),
+  because it hosts the `retrigger-*-credential` endpoints and the issuer credential-response callback receiver.
+  Without these vars the Administration deployment **CrashLoopBackOffs** at startup
+  (`OptionsValidationException: 'BaseAddress'/'ApiKey'/… field is required`). Registration stays up because it does
+  not call `AddApplicationChecklist`. This matches the config spec in the callback ADR (worker **+**
+  administration-service) — see D13.
 - **Seed idempotency guard** (`charts/tx-data-provider/templates/post-install-identityhub-seed.yaml`): skip
   re-requesting a credential already ISSUED (prevents duplicate VCs on re-runs).
 - **Test-data seeding BPN fix** (`configmap-portal-testdata-seeding.yaml`): plain BPN, not the connector DID.
 - **In-cluster did:web resolver shim** (chart template `templates/didweb-resolver.yaml`, gated by
-  `didwebResolver.enabled`, + `dim.universalResolverAddress` in
-  `values-combined-portal-additions.yaml`): resolves `did:web:*.tx.test` for `VALIDATE_DID_DOCUMENT` so onboarding
-  needs no DID-resolution DB bridge (§7.1). Sandbox-only — drop for a real Universal Resolver in production.
+  `didwebResolver.enabled`; the worker/admin read it from `identityHub.universalResolverAddress` →
+  `APPLICATIONCHECKLIST__IDENTITYHUB__UNIVERSALRESOLVERADDRESS`, paired with `…__MAXVALIDATIONTIMEINDAYS`, per D12 —
+  the older `dim.universalResolverAddress` override is retained but **no longer read** on the IdentityHub path):
+  resolves `did:web:*.tx.test` for `VALIDATE_DID_DOCUMENT` so onboarding needs no DID-resolution DB bridge (§7.1).
+  Sandbox-only — drop for a real Universal Resolver in production.
 
 ## 9. Gotchas quick-reference
 
@@ -307,8 +328,10 @@ Ran this runbook from a full teardown (deleted the kind cluster) on a clean box.
   the prior session (204 → BPNL_CREDENTIAL/MEMBERSHIP_CREDENTIAL DONE).
 - §7.1 DID resolution: the in-cluster `didweb-resolver` shim is deployed and **verified** — it returns the
   provider's published did:web (HTTP 200 + full `didDocument`, no error → VALIDATE passes) and `notFound` for an
-  unpublished one; the worker's `APPLICATIONCHECKLIST__DIM__UNIVERSALRESOLVERADDRESS` points at it. This removes
-  the DB bridge for DID resolution. Remaining: a freshly onboarded participant's did:web must be *published* by
+  unpublished one; the worker points at it. This removes
+  the DB bridge for DID resolution. (Env-var name: this 2026-07-16 log predates D12/BE-324 — the IdentityHub path
+  now reads `APPLICATIONCHECKLIST__IDENTITYHUB__UNIVERSALRESOLVERADDRESS`, not the older `…DIM__…` key, which is no
+  longer read on this path.) Remaining: a freshly onboarded participant's did:web must be *published* by
   the worker's create/activate for the resolver to return it (see §7.1 residual note).
 
 Conclusion: the documented §2–§6 process reproduces the durable stack exactly; §7 is accurate and the DID-resolution

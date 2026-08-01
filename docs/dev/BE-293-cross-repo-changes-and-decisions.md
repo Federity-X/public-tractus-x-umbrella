@@ -25,9 +25,9 @@ the OSS umbrella stack.
 
 | Repo | Branch | Role | Our changes? |
 |---|---|---|---|
-| **public-tractusx-identityhub** | `feat/holder-credential-request-status-callback` (on Federity-X `fix/321-322-dcp-e2e-collections-and-charts`) | The wallet runtime + **our new observer extension** | **Yes** (new module + fixes) — uncommitted |
-| **portal-backend** | `feat/BE-293-identityhub-wallet` (on eclipse-tractusx) | Portal backend routed to the IdentityHub wallet | **Yes** — uncommitted working tree; built into `:be293` images |
-| **public-tractus-x-umbrella** | `feature/BE-241-admin-panel-per-participant-plus` | Wiring/compose (overlays, seed, worker config, docs) | **Yes** — uncommitted |
+| **public-tractusx-identityhub** | `feat/holder-credential-request-status-callback` (on Federity-X `fix/321-322-dcp-e2e-collections-and-charts`) | The wallet runtime + **our new observer extension** | **Yes** (new module + fixes) — committed |
+| **portal-backend** | `feat/BE-293-identityhub-wallet` (on eclipse-tractusx) | Portal backend routed to the IdentityHub wallet | **Yes** — committed; built into `:be293` images |
+| **public-tractus-x-umbrella** | `feat/BE-293-connector-bundle-and-portal-integration` | Wiring/compose (overlays, seed, worker config, docs) | **Yes** — committed |
 | public-tractusx-edc | `main` (== upstream) | Connectors (DCP) | No — build only |
 | public-sldt-digital-twin-registry | `feat/shell-descriptors-sort-direction` | DTR | No — build only |
 
@@ -79,6 +79,17 @@ state. **Alternatives rejected** (full detail in `BE-293-architecture-callback.m
 *poll* the IssuerService issuance API — couples the Portal to issuer internals + adds a poller; (b) add issuer-side
 push in the IssuerService — issuer-specific, doesn't generalise. Chosen: a small holder-side observer that reuses
 the Portal's existing endpoint. Long-term: replace polling with a real SPI event (see `UPSTREAM-ISSUE.md`).
+
+> **As-shipped update (polling backstop).** The observer callback remains the **primary/fast path** — a company
+> onboarding advances within seconds of issuance. But a fire-once callback is lossy across restarts and unreachable
+> if the extension is mis-deployed, and the deterministic `holderPid` (`{ctx}-{type}`) is the PK of the holder
+> credential-request store, so a retrigger can't re-drive a lost request. So portal-backend additionally added a
+> **bounded portal-side poll** of the IdentityHub **holder credential-request status** endpoint
+> (`GET {IH}/v1alpha/participants/{ctx}/credentials/request/{holderPid}`) inside `AWAIT_*_CREDENTIAL_RESPONSE`,
+> capped by `IdentityHub:MaxCredentialWaitTimeInDays` (default 1 day). This is **not** the rejected alternative (a):
+> it reads the **holder-side** terminal state — the same state the observer reads — not the IssuerService's issuer
+> internals. Net: callback = fast path, poll = resilience backstop, so a lost/undelivered callback degrades
+> onboarding to *slower*, not *stuck*. See portal-backend `docs/onboarding/identityhub-wallet.md`.
 
 ### D2 · Durable **Postgres**-backed IdentityHub (not in-memory)
 **Why:** for a real onboarding demo the wallet store must survive a restart — a Portal-onboarded participant's
@@ -211,6 +222,44 @@ of the above (and the guard fails an empty `walletProvider`), and the portal `:b
 `2b9ab02e4`. **Alternative rejected:** default `walletProvider` in the chart — the backend deliberately dropped
 the default so an upgrade can't silently move a deployment onto a different wallet; the render guard preserves
 that intent at `helm template` time.
+
+### D13 · BE-324 — the **Administration** service also needs the IdentityHub env (not only the worker)
+
+**Why:** D12 wired the `APPLICATIONCHECKLIST__IDENTITYHUB__*` block into the `processes-worker` cronjob only,
+on the (reasonable-looking, but wrong) assumption that only the worker touches the IdentityHub — repeated in the
+portal-backend review note `handoffs/umbrella-pr2.md §1` ("Administration does not use it"). On a fresh Phase 2
+deploy the **Administration deployment CrashLoopBackOff'd** at startup:
+`OptionsValidationException: DataAnnotation validation failed for 'IdentityHubSettings' members: 'BaseAddress' …
+'ApiKey' … field is required`. Root cause: admin `Program.cs` calls
+`.AddApplicationChecklist("ApplicationChecklist")` → `AddIdentityHubService(GetSection("IdentityHub"))`, which binds
+`IdentityHubSettings` with `ValidateOnStart` (`ValidateDataAnnotations`). Because the admin `appsettings.json`
+ships a non-empty `ApplicationChecklist:IdentityHub` section (all keys present but empty), the validator runs and
+the `[Required(AllowEmptyStrings=false)]` fields fail unless the env supplies them. The Registration service stays
+up precisely because it does **not** call `AddApplicationChecklist`. Note the distinction the earlier assumption
+missed: only the worker *consumes* these at runtime (it runs `VALIDATE_DID_DOCUMENT` and the credential requests),
+but both the worker **and** the administration service *require them present + non-empty at startup*.
+
+**Fix (umbrella commit `4de576e`, BE-324):** add the identical 15-var `APPLICATIONCHECKLIST__IDENTITYHUB__*` block
+(gated by `identityHub.enabled`, `APIKEY` sourced from the `identityhub-api-key` secret) to
+`deployment-backend-administration.yaml` in the chart patch. Both the worker and the admin service now render the
+block; the admin service comes up `1/1`, and — because the admin service hosts the callback receiver — the holder
+credential callback (`POST /api/administration/registration/issuer/{bpn,membership}credential`) then succeeds,
+advancing `AWAIT_*_CREDENTIAL_RESPONSE` → `DONE`. This matches the config spec already stated in the callback ADR
+(`processes-worker` **+** `administration-service`); it corrects the worker-only framing in D12 and the
+portal-backend `umbrella-pr2.md` note.
+
+> Verified 2026-08-01: fresh from-scratch rebuild on kind `umbrella-1609`; a browser-equivalent (API-driven)
+> onboarding for BPN `BPNL00000042ONBD` reached `IDENTITY_WALLET`/`BPNL_CREDENTIAL`/`MEMBERSHIP_CREDENTIAL` = DONE,
+> both VCs `state 500` in the holder wallet, both callbacks delivered `SUCCESSFUL`.
+>
+> **Note — the admin service validates but never *calls* the IdentityHub client:** its IdentityHub-related endpoints
+> (the `retrigger-*-credential` handlers and the issuer callback receiver) only schedule a process step / advance
+> the checklist in the DB — the actual IdentityHub admin-API calls live in `IdentityHubService` and run only in the
+> worker. So requiring the full block at admin startup is *fail-fast-by-design* (admin shares the
+> `AddApplicationChecklist` wiring with the worker), at the cost of the admin deployable carrying worker-only
+> secrets (`ApiKey`, `IssuerAdminApiKey`) — a mild least-privilege wrinkle, not a bug. Splitting that would require
+> changing the section-presence gate in `AddIdentityHubService` together with the empty-string keys in
+> `appsettings.json`; not recommended.
 
 ## What we deliberately did NOT change
 

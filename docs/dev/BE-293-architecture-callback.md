@@ -6,13 +6,14 @@ SPDX-License-Identifier: CC-BY-4.0
 
 > Architecture decision record (ADR) for the BE-293 IdentityHub onboarding-wallet integration.
 >
-> ✅ **IMPLEMENTED & verified 2026-07-18** (holder-side push observer). The problem/decision/rationale
-> below stand. One caveat: the **"Deployment config spec" table** further down predates the **F6**
-> IssuerService holder-registration step, so it omits 4 keys —
-> `APPLICATIONCHECKLIST__IDENTITYHUB__{ISSUERADMINBASEADDRESS,ISSUERADMINAPIKEY,ISSUERPARTICIPANTID,FRAMEWORKCONTRACTVERSION}`.
-> For the complete **as-built** config (chart patch across 5 files, top-level `backend.walletProvider`,
-> the value-gated `charts/umbrella/templates/didweb-resolver.yaml`, patch-and-repackage-with-fail-fast
-> bootstrap) see `BE-293-cross-repo-changes-and-decisions.md` (findings F1–F6) and `BE-293-full-rebuild-runbook.md`.
+> ✅ **IMPLEMENTED & verified** (holder-side push observer; re-verified from scratch 2026-08-01). The
+> problem/decision/rationale below stand. The **"Deployment config spec" table** has been brought up to the
+> as-built set (all 15 `APPLICATIONCHECKLIST__IDENTITYHUB__*` keys incl. the F6 IssuerService holder-registration
+> keys, the D12 resolver/validation keys, and the top-level `ONBOARDING__WALLETPROVIDER` selector); it now also
+> notes the block is required on **both** the worker and the administration service (D13). For the complete
+> **as-built** config (chart patch across 5 files, top-level `backend.walletProvider`, the value-gated
+> `charts/umbrella/templates/didweb-resolver.yaml`, patch-and-repackage-with-fail-fast bootstrap) see
+> `BE-293-cross-repo-changes-and-decisions.md` (findings F1–F6, decisions D1–D13) and `BE-293-full-rebuild-runbook.md`.
 
 ## The problem
 
@@ -81,6 +82,18 @@ The adapter uses **only stable public SPIs** (`HolderCredentialRequestStore.quer
 issuer-domain adapter*, invisible to the Portal — categorically different from portal-side
 poll-steps.
 
+> **Reconciliation with what actually shipped.** The holder-side observer callback above remains the
+> **primary/fast path**, and the rejection of *"poll the IssuerService issuance API"* still stands (that
+> would couple the Portal to issuer internals). What portal-backend *did* add later, deliberately, is a
+> **bounded portal-side poll of the IdentityHub holder credential-request *status* endpoint** inside
+> `AWAIT_*_CREDENTIAL_RESPONSE` — reading the *holder-side* terminal state (`ISSUED`/`ERROR`), the **same
+> state this observer reads**, not issuer internals. It exists because a fire-once callback is lossy across
+> restarts / mis-deployment and the deterministic `holderPid` makes a retrigger non-idempotent. So the final
+> shape is **callback (fast) + bounded status-poll (backstop)**: a lost callback degrades onboarding to
+> *slower*, not *stuck*. This narrows — does not contradict — the "no poll-steps" stance above: the rejected
+> thing was polling the *issuer*; the shipped poll reads the holder's own request state. See
+> portal-backend `docs/onboarding/identityhub-wallet.md` and `BE-293-cross-repo-changes-and-decisions.md` (D1).
+
 ## End-to-end flow
 
 ```
@@ -132,32 +145,45 @@ the design matches the Portal's original intent — any issuer can drive the cal
 section — set as env (`APPLICATIONCHECKLIST__<Section>__<Key>`). Presence of the `IdentityHub`
 section is what enables its validation, so set it only on IdentityHub deployments:
 
+The wallet is now selected by the **top-level `Onboarding:WalletProvider`** (D12 replaced the per-feature
+`UseDimWallet` flags), and the full `IdentityHub` block below is validated at startup on **both** the
+`processes-worker` and the `administration-service` (D13 — the admin service registers the IdentityHub client via
+`AddApplicationChecklist`). All 15 `IdentityHub` values are `[Required]`/`[Range]` and fail startup if absent/empty:
+
 | Key | Value |
 |---|---|
-| `ApplicationChecklist:IssuerComponent:WalletProvider` | `IdentityHub` |
-| `ApplicationChecklist:IdentityHub:BaseAddress` | `http://<shared-ih>/api/identity` |
+| `Onboarding:WalletProvider` (env `ONBOARDING__WALLETPROVIDER`) | `IdentityHub` (or `Dim`/`Custodian`) — top-level, no default |
+| `ApplicationChecklist:IdentityHub:BaseAddress` | `http://<shared-ih>/api/identity` (**admin** ingress) |
 | `ApplicationChecklist:IdentityHub:ApiKey` | IdentityHub super-user key |
 | `ApplicationChecklist:IdentityHub:DidDocumentBaseLocation` | did:web host base (e.g. `ih.tx.test`) |
+| `ApplicationChecklist:IdentityHub:UniversalResolverAddress` | resolver base (D12; the in-cluster shim `http://didweb-resolver:8080/`) |
+| `ApplicationChecklist:IdentityHub:MaxValidationTimeInDays` | DID-validation deadline (D12; e.g. `7`) |
 | `ApplicationChecklist:IdentityHub:CredentialServiceBaseAddress` | `http://<shared-ih>/api/credentials` |
 | `ApplicationChecklist:IdentityHub:IssuerDid` | `did:web:<issuer-host>:<issuer>` |
+| `ApplicationChecklist:IdentityHub:IssuerAdminBaseAddress` | `http://<issuer-admin>/api/admin` (F6 holder registration) |
+| `ApplicationChecklist:IdentityHub:IssuerAdminApiKey` | IssuerService super-user key (F6) |
+| `ApplicationChecklist:IdentityHub:IssuerParticipantId` | issuer participant-context id, **plain** not base64 (F6) |
 | `ApplicationChecklist:IdentityHub:BpnCredentialDefinitionId` | issuer cred-def id for BpnCredential |
 | `ApplicationChecklist:IdentityHub:MembershipCredentialDefinitionId` | issuer cred-def id for MembershipCredential |
+| `ApplicationChecklist:IdentityHub:FrameworkContractVersion` | framework-agreement contract version |
 
-(`BpnCredentialType`/`MembershipCredentialType`/`CredentialFormat`/`HolderRole` default correctly.)
-Leaving the `IdentityHub` section unset keeps stub/DIM deployments unchanged (validation skipped).
+(`BpnCredentialType`/`MembershipCredentialType` ship defaults `BpnCredential`/`MembershipCredential`, and
+`MaxCredentialWaitTimeInDays` defaults to `1` — override only if the issued VC types differ / issuance can exceed
+a day.) Leaving the `IdentityHub` section unset keeps stub/DIM deployments unchanged (validation skipped).
 
-**IdentityHub runtime** (the `portal-credential-callback` extension) — EDC settings, set as env
-with the EDC normalisation (`tx.portal.callback.base-url` → `TX_PORTAL_CALLBACK_BASE_URL`).
-Unset `base-url` leaves the extension inert:
+**IdentityHub runtime** (the `portal-credential-callback` extension) — EDC settings, set as env with the EDC
+normalisation. **Keys are dot-separated** (`tx.portal.callback.base.url` → `TX_PORTAL_CALLBACK_BASE_URL`): a
+hyphenated key is *not* env-reachable (D3), so the shipped keys use dots. Unset `base.url` leaves the extension inert:
 
 | Setting | Value |
 |---|---|
-| `tx.portal.callback.base-url` | `https://portal-backend.<host>` |
-| `tx.portal.callback.token-url` | `https://centralidp.<host>/auth/realms/CX-Central/protocol/openid-connect/token` |
-| `tx.portal.callback.client-id` | technical user with `update_application_bpn_credential` + `update_application_membership_credential` |
-| `tx.portal.callback.client-secret` | that user's secret |
+| `tx.portal.callback.base.url` | `http://portal-backend.<host>` (admin API host; public host 405s the callback POST) |
+| `tx.portal.callback.token.url` | `http://centralidp.<host>/auth/realms/CX-Central/protocol/openid-connect/token` |
+| `tx.portal.callback.client.id` | `sa-cl24-01` — the seeded technical user with `update_application_bpn_credential` + `update_application_membership_credential` (D5) |
+| `tx.portal.callback.client.secret` | that user's secret (from a k8s secret / Vault) |
 
-(`bpn-credential-type`/`membership-credential-type`/`scope`/`interval-seconds` default correctly.)
+(`tx.portal.callback.{bpn,membership}.credential.type`/`scope`/`interval.seconds` default correctly; keep the
+credential-type strings identical on all three sides — a mismatch silently stalls `AWAIT_*` — see D6.)
 
 ## Status — implemented & verified
 

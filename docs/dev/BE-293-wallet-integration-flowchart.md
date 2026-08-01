@@ -95,7 +95,17 @@ sequenceDiagram
   `did:web:*.tx.test`, so this step used to be a demo DB bridge. It is now served by the in-cluster
   `didweb-resolver` shim (chart template `templates/didweb-resolver.yaml`) — the Portal resolves `did:web:*.tx.test` organically, no
   bridge. In production you drop the shim and point at a real Universal Resolver over public-HTTPS did:web (see D11).
-  The only remaining dotted branch is when a participant's DID was never **published** (worker create/activate race);
-  publish it and the step passes.
+  The only remaining dotted branch is when a participant's DID was never **published** (its create/activate did not
+  complete); publish it and the step passes.
+- **AWAIT advances via callback *or* poll:** the diagram shows the observer callback path (C1→C5), which is the
+  **fast path** (advances in seconds). Portal-backend also **polls** the IdentityHub holder credential-request
+  status endpoint inside `AWAIT_*_CREDENTIAL_RESPONSE` as a **backstop** (bounded by
+  `IdentityHub:MaxCredentialWaitTimeInDays`, default 1 day), so a missed/lost callback still advances the step —
+  onboarding degrades to *slower*, not *stuck*. See D1 and portal-backend `docs/onboarding/identityhub-wallet.md`.
+- **On the IH DID-publish log noise:** during wallet activation the IH logs
+  `Cannot publish DID … state is not 'ACTIVATED', but 'CREATED'` then `already published … will overwrite it`.
+  This is **benign, deterministic** stock EDC 0.17.0 `ParticipantContextEventCoordinator` ordering (the keypair is
+  added — and its activation attempts a publish — before the context is activated), **not a race** and not
+  fork-introduced; the DID ends published and `IDENTITY_WALLET` completes every time.
 - **The observer needs no Portal change:** it posts the Portal's pre-existing issuer callback endpoint. See
-  `BE-293-architecture-callback.md` (ADR) and `BE-293-cross-repo-changes-and-decisions.md` (D1–D11).
+  `BE-293-architecture-callback.md` (ADR) and `BE-293-cross-repo-changes-and-decisions.md` (D1–D13).
